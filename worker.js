@@ -1,4 +1,7 @@
 // おちゃこAI 生成ワーカー（UIスレッドを止めないため推論はここで実行）
+// プロンプト形式は製品版アプリと同一：
+//   ユーザー：{発話}\nAI：{返事}\n…\nAI：
+// 停止マーカーは「\nユーザー：」「\nAI：」。
 let session = null, itos = [];
 let stoi = new Map();
 
@@ -14,6 +17,15 @@ function mulberry32(seed) {
   };
 }
 
+function buildPrompt(history) {
+  let s = '';
+  for (const m of history) {
+    if (m.role === 'user') s += 'ユーザー：' + m.text.trim() + '\n';
+    else s += 'AI：' + m.text.trim() + '\n';
+  }
+  return s + 'AI：';
+}
+
 self.onmessage = async (e) => {
   const m = e.data;
   try {
@@ -26,7 +38,7 @@ self.onmessage = async (e) => {
       session = await ort.InferenceSession.create(new Uint8Array(m.modelBytes), { executionProviders: ['wasm'] });
       self.postMessage({ type: 'ready' });
     } else if (m.type === 'generate') {
-      const out = await generate(m.text);
+      const out = await generate(m.history);
       self.postMessage({ type: 'done', id: m.id, text: out });
     }
   } catch (err) {
@@ -34,7 +46,8 @@ self.onmessage = async (e) => {
   }
 };
 
-async function generate(promptText) {
+async function generate(history) {
+  const promptText = buildPrompt(history);
   const rand = mulberry32((Math.random() * 2 ** 31) | 0);
   let ids = [BOS];
   for (const ch of promptText) if (stoi.has(ch)) ids.push(stoi.get(ch));
@@ -57,12 +70,16 @@ async function generate(promptText) {
     let r = rand() * sum, nxt = EOS;
     for (let i = 0; i < V; i++) { if (probs[i] > 0) { r -= probs[i]; if (r <= 0) { nxt = i; break; } } }
     if (nxt === EOS) break;
+    if (itos[nxt] === null || itos[nxt] === undefined) break; // 製品版と同じく空文字トークンで停止
     outIds.push(nxt); ids.push(nxt);
     const text = outIds.map(i => itos[i] ?? '').join('');
-    if (text.includes('\nユーザー') || text.includes('\nあなた：')) break;
-    self.postMessage({ type: 'token', text });
+    if (text.includes('\nユーザー：') || text.includes('\nAI：')) break;
+    self.postMessage({ type: 'token', text: clean(text) });
   }
-  let text = outIds.map(i => itos[i] ?? '').join('');
-  for (const mk of ['\nユーザー', '\nあなた：']) { const p = text.indexOf(mk); if (p >= 0) text = text.slice(0, p); }
-  return text.trim();
+  return clean(outIds.map(i => itos[i] ?? '').join(''));
+}
+
+function clean(text) {
+  for (const mk of ['\nユーザー：', '\nAI：']) { const p = text.indexOf(mk); if (p >= 0) text = text.slice(0, p); }
+  return text.replace(/\n+$/, '').trim();
 }

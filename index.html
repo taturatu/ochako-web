@@ -69,6 +69,7 @@ const CACHE_NAME = "ochako-model-v1";
 const VOCAB_URL = "vocab.json";
 
 let itos = [], worker = null, workerReady = false, loadMode = "cache";
+let history = [];
 let generating = false, currentResolve = null, currentBubble = null, genTimer = null;
 const logEl = document.getElementById('log'), inp = document.getElementById('inp'),
       sendBtn = document.getElementById('send'), statusEl = document.getElementById('status'),
@@ -201,15 +202,17 @@ function setGenerating(on, bubble) {
 async function doSend() {
   const text = inp.value.trim(); if (!text || !workerReady || generating) return;
   inp.value = ''; addMsg(text, 'user');
+  history.push({ role: 'user', text });
   const bubble = addMsg('考え中…', 'bot');
   setGenerating(true, bubble);
   try {
     const out = await new Promise((resolve, reject) => {
       currentResolve = (t, err) => err ? reject(err) : resolve(t);
-      worker.postMessage({ type: 'generate', id: 1, text });
+      worker.postMessage({ type: 'generate', id: 1, history });
     });
     bubble.textContent = out || '（応答が生成できませんでした）';
-  } catch (e) { bubble.textContent = 'エラー: ' + e.message; }
+    if (out) history.push({ role: 'assistant', text: out });
+  } catch (e) { bubble.textContent = 'エラー: ' + e.message; history.pop(); }
   setGenerating(false);
   inp.focus();
 }
