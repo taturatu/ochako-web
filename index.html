@@ -9,6 +9,16 @@
   body { margin:0; font-family: "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", sans-serif; background:#f7f5f2; color:#1f1e1c; }
   header { padding:14px 16px; background:#fff; border-bottom:1px solid #e5e1da; font-weight:700; }
   header small { display:block; font-weight:400; color:#6b675f; margin-top:2px; }
+  #setup { max-width:760px; margin:16px auto 0; padding:16px; background:#fff; border:1px solid #e5e1da; border-radius:14px; }
+  #setup h2 { margin:0 0 8px; font-size:16px; }
+  #setup p { margin:6px 0; font-size:14px; color:#44413c; line-height:1.6; }
+  .opt { display:block; padding:10px 12px; border:1px solid #cfc9bf; border-radius:12px; margin:8px 0; cursor:pointer; font-size:15px; }
+  .opt small { display:block; color:#6b675f; margin-top:2px; font-size:13px; }
+  .opt:has(input:checked) { border-color:#2f6f4f; background:#eef5f0; }
+  #start { padding:12px 24px; border-radius:12px; border:0; background:#2f6f4f; color:#fff; font-size:16px; margin-top:8px; }
+  #start:disabled { opacity:.5; }
+  #delcache { padding:8px 14px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:13px; margin-left:8px; display:none; }
+  #setupStatus { margin-top:10px; font-size:13px; color:#6b675f; }
   #log { max-width:760px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
   .msg { padding:10px 14px; border-radius:14px; white-space:pre-wrap; line-height:1.6; max-width:85%; }
   .user { background:#e8f0e9; align-self:flex-end; }
@@ -23,19 +33,31 @@
 </head>
 <body>
 <header>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></header>
+
+<div id="setup">
+  <h2>モデルの読み込み方法</h2>
+  <p>モデルは約258MBあります。読み込み方法を選んでから「読み込み開始」を押してください。</p>
+  <label class="opt"><input type="radio" name="mode" value="cache" checked> ブラウザに保存して使う
+    <small>初回だけダウンロードして、この端末のブラウザに保存します。次回からはダウンロードなしで、すぐ使えます。</small></label>
+  <label class="opt"><input type="radio" name="mode" value="fresh"> 毎回ダウンロードする
+    <small>保存はしません。開くたびに約258MBをダウンロードします。</small></label>
+  <button id="start">読み込み開始</button>
+  <button id="delcache">保存済みモデルを削除</button>
+  <div id="setupStatus"></div>
+</div>
+
 <div id="log"></div>
 <div id="bar"><div>
   <input id="inp" placeholder="メッセージを入力" autocomplete="off">
   <button id="send" disabled>送信</button>
-</div><div id="status">モデルを読み込んでいます…（約258MB、初回は時間がかかります）</div></div>
+</div><div id="status"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <script>
 // ===== 設定 =====
-// モデルは Hugging Face 上に16MBずつ分割して配置（model.onnx.part00 〜 part16、計17個）。
-// 読み込み時に全パートを取得して結合し、1つのONNXモデルとして使う。
-const MODEL_BASE = "https://huggingface.co/tamasann/ochako-v3/resolve/main/";
-const MODEL_PARTS = 17;
+// モデルは Hugging Face 上の単一ファイル model.onnx を URL で読み込む。
+const MODEL_URL = "https://huggingface.co/tamasann/ochako-v3/resolve/main/model.onnx";
+const CACHE_NAME = "ochako-model-v1";
 const VOCAB_URL = "vocab.json";
 // B1.5（製品標準デコード）
 const TEMPERATURE = 0.65, TOP_K = 40, REP_PENALTY = 1.15, MAX_NEW = 150, MAX_SEQ = 512;
@@ -43,7 +65,9 @@ const PAD = 0, BOS = 1, EOS = 2;
 
 let itos = [], stoi = new Map(), session = null;
 const logEl = document.getElementById('log'), inp = document.getElementById('inp'),
-      sendBtn = document.getElementById('send'), statusEl = document.getElementById('status');
+      sendBtn = document.getElementById('send'), statusEl = document.getElementById('status'),
+      setupEl = document.getElementById('setup'), setupStatusEl = document.getElementById('setupStatus'),
+      startBtn = document.getElementById('start'), delBtn = document.getElementById('delcache');
 
 function addMsg(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
@@ -59,35 +83,82 @@ function mulberry32(seed) {
   };
 }
 
-async function fetchModel() {
-  // 全パートを並行取得して結合する（進捗を status に表示）
-  const bufs = new Array(MODEL_PARTS);
-  let done = 0;
-  await Promise.all(bufs.map(async (_, i) => {
-    const name = "model.onnx.part" + String(i).padStart(2, "0");
-    const r = await fetch(MODEL_BASE + name);
-    if (!r.ok) throw new Error(name + " の取得に失敗しました (" + r.status + ")");
-    bufs[i] = new Uint8Array(await r.arrayBuffer());
-    done++;
-    statusEl.textContent = `モデルを読み込んでいます… ${done}/${MODEL_PARTS}（約258MB、初回は時間がかかります）`;
-  }));
-  const total = bufs.reduce((a, b) => a + b.length, 0);
-  const merged = new Uint8Array(total);
+async function downloadWithProgress() {
+  const r = await fetch(MODEL_URL);
+  if (!r.ok) throw new Error("モデルの取得に失敗しました (" + r.status + ")");
+  const total = Number(r.headers.get("Content-Length")) || 270367948;
+  const reader = r.body.getReader();
+  const chunks = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); got += value.length;
+    setupStatusEl.textContent = `ダウンロード中… ${(got / 1048576).toFixed(0)}MB / ${(total / 1048576).toFixed(0)}MB`;
+  }
+  const merged = new Uint8Array(got);
   let off = 0;
-  for (const b of bufs) { merged.set(b, off); off += b.length; }
+  for (const c of chunks) { merged.set(c, off); off += c.length; }
   return merged;
 }
 
-async function init() {
-  const v = await (await fetch(VOCAB_URL)).json();
-  itos = v.itos;
-  itos.forEach((c, i) => { if (c !== null && c !== undefined) stoi.set(c, i); });
-  ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
-  const modelBytes = await fetchModel();
-  session = await ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'] });
-  statusEl.textContent = '準備できました。話しかけてみてください。';
-  sendBtn.disabled = false; inp.focus();
+async function loadModelBytes() {
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  if (mode === "cache" && "caches" in window) {
+    const cache = await caches.open(CACHE_NAME);
+    const hit = await cache.match(MODEL_URL);
+    if (hit) {
+      setupStatusEl.textContent = "保存済みモデルを使います（ダウンロードなし）";
+      return new Uint8Array(await hit.arrayBuffer());
+    }
+    const bytes = await downloadWithProgress();
+    try {
+      await cache.put(MODEL_URL, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
+      setupStatusEl.textContent = "保存しました。次回からはダウンロードなしで使えます。";
+    } catch (e) {
+      setupStatusEl.textContent = "保存はできませんでしたが、今回はこのまま使えます。（端末の空き容量不足の可能性があります）";
+    }
+    return bytes;
+  }
+  return downloadWithProgress();
 }
+
+async function refreshCacheUI() {
+  if (!("caches" in window)) return;
+  const cache = await caches.open(CACHE_NAME);
+  const hit = await cache.match(MODEL_URL);
+  if (hit) {
+    setupStatusEl.textContent = "この端末に保存済みのモデルがあります。「ブラウザに保存して使う」のままで開始すると、ダウンロードなしで使えます。";
+    delBtn.style.display = "inline-block";
+  } else {
+    delBtn.style.display = "none";
+  }
+}
+delBtn.onclick = async () => {
+  await caches.delete(CACHE_NAME);
+  setupStatusEl.textContent = "保存済みモデルを削除しました。";
+  delBtn.style.display = "none";
+};
+
+let started = false;
+startBtn.onclick = async () => {
+  if (started) return; started = true; startBtn.disabled = true;
+  try {
+    const v = await (await fetch(VOCAB_URL)).json();
+    itos = v.itos;
+    itos.forEach((c, i) => { if (c !== null && c !== undefined) stoi.set(c, i); });
+    ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+    const modelBytes = await loadModelBytes();
+    setupStatusEl.textContent = "モデルを準備しています…";
+    session = await ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'] });
+    setupEl.style.display = "none";
+    statusEl.textContent = '準備できました。話しかけてみてください。';
+    sendBtn.disabled = false; inp.focus();
+  } catch (e) {
+    setupStatusEl.textContent = '読み込みに失敗しました: ' + e.message;
+    started = false; startBtn.disabled = false;
+  }
+};
+refreshCacheUI();
 
 async function generate(promptText) {
   const rand = mulberry32((Math.random() * 2 ** 31) | 0);
@@ -133,7 +204,6 @@ sendBtn.onclick = async () => {
   sendBtn.disabled = false; inp.focus();
 };
 inp.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.onclick(); });
-init().catch(e => { statusEl.textContent = '読み込みに失敗しました: ' + e.message; });
 </script>
 </body>
 </html>
