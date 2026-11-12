@@ -10,7 +10,8 @@ let stoi = new Map();
 
 const MAX_SEQ = 512;
 // デコード設定（標準は製品標準 B1.5。画面から変更できる）
-let CFG = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1, ep: 'auto' };
+let CFG = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1, ep: 'auto', maxSeq: 512, lowMem: false };
+const effSeq = () => Math.min(CFG.maxSeq || MAX_SEQ, MAX_SEQ);
 const BOS = 1, EOS = 2;
 const NL = 12, NH = 10, HD = 64;
 let cancelFlag = false;
@@ -122,18 +123,18 @@ async function genKV(ids, rand) {
     }
     if (step % 2 === 0 || outText.length < 12) postMessage({ type: 'partial', text: outText });
     if (outText.length >= 600) break;
-    if (step === CFG.maxNew - 1 || pastLen >= MAX_SEQ) break;
+    if (step === CFG.maxNew - 1 || pastLen >= effSeq()) break;
     r = await runKV([nxt], pastLen, past);
     past = r.past; pastLen += 1;
     lastLogits = r.logits.subarray(0, V);
   }
   // past がカバーする範囲だけをキャッシュに残す（次ターンの接頭辞として再利用）
-  if (pastLen >= 3 && pastLen <= MAX_SEQ) {
+  if (pastLen >= 3 && pastLen <= effSeq()) {
     cacheIds = allIds.slice(0, pastLen);
     cachePast = [];
     for (let i = 0; i < NL; i++) cachePast.push({ k: past[i].k.data, v: past[i].v.data });
   }
-  return { text: outText, genCount, ctxLen: Math.min(allIds.length, MAX_SEQ), reused };
+  return { text: outText, genCount, ctxLen: Math.min(allIds.length, effSeq()), reused };
 }
 
 // 従来版生成（全系列を毎回計算）
@@ -142,7 +143,7 @@ async function genFull(ids, rand) {
   let outText = '', genCount = 0;
   for (let step = 0; step < CFG.maxNew; step++) {
     if (cancelFlag) break;
-    const ctx = ids.slice(-MAX_SEQ);
+    const ctx = ids.slice(-effSeq());
     const feeds = { idx: new ort.Tensor('int64', BigInt64Array.from(ctx.map(BigInt)), [1, ctx.length]) };
     const out = await session.run(feeds);
     const logits = out.logits.data;
@@ -159,7 +160,7 @@ async function genFull(ids, rand) {
     if (outText.length >= 600) break;
   }
   cacheIds = null; cachePast = null;
-  return { text: outText, genCount, ctxLen: Math.min(ids.length, MAX_SEQ), reused: 0 };
+  return { text: outText, genCount, ctxLen: Math.min(ids.length, effSeq()), reused: 0 };
 }
 
 self.onmessage = async (e) => {
@@ -181,16 +182,17 @@ self.onmessage = async (e) => {
       // 明示時も25秒で見切って WASM にフォールバックする。
       const wantGPU = CFG.ep === 'webgpu' && typeof navigator !== 'undefined' && 'gpu' in navigator;
       session = null;
+      const memOpts = CFG.lowMem ? { enableCpuMemArena: false, enableMemPattern: false } : {};
       if (wantGPU) {
         try {
           session = await Promise.race([
-            ort.InferenceSession.create(buf, { executionProviders: ['webgpu'] }),
+            ort.InferenceSession.create(buf, { executionProviders: ['webgpu'], ...memOpts }),
             new Promise((_, rej) => setTimeout(() => rej(new Error('webgpu timeout')), 25000)),
           ]);
           usedEP = 'webgpu';
         } catch (gpuErr) { session = null; }
       }
-      if (!session) session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
+      if (!session) session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'], ...memOpts });
       kvMode = session.inputNames.includes('offset');
       cacheIds = null; cachePast = null;
       postMessage({ type: 'ready', kv: kvMode, ep: usedEP, isolated: (typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : false) });
@@ -205,7 +207,7 @@ self.onmessage = async (e) => {
       const ms = performance.now() - t0;
       postMessage({ type: 'done', text: r.text, stopped: cancelFlag, stats: {
         tps: r.genCount > 0 ? +(r.genCount / (ms / 1000)).toFixed(1) : 0,
-        gen: r.genCount, ctx: r.ctxLen, ctxMax: MAX_SEQ, reused: r.reused } });
+        gen: r.genCount, ctx: r.ctxLen, ctxMax: effSeq(), reused: r.reused } });
       return;
     }
   } catch (err) {

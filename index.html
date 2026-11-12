@@ -102,12 +102,13 @@
   <div class="row"><label>繰り返しペナルティ</label><input type="range" id="set-rep" min="1" max="1.5" step="0.01"><span class="val" id="val-rep"></span></div>
   <div class="row"><label>最大トークン数</label><input type="range" id="set-maxnew" min="10" max="300" step="5"><span class="val" id="val-maxnew"></span></div>
   <div class="row"><label>CPUコア数（スレッド）</label><input type="range" id="set-threads" min="1" max="8" step="1"><span class="val" id="val-threads"></span></div>
+  <div class="row"><label>低メモリモード</label><input type="checkbox" id="set-lowmem" style="width:20px;height:20px;"><span class="note" id="lowmem-state"></span></div>
   <div class="row"><label>実行方式</label><select id="set-ep">
     <option value="auto">自動（推奨・CPU）</option>
     <option value="webgpu">WebGPU（試験的）</option>
     <option value="wasm">CPU（WASM）</option>
   </select></div>
-  <p class="note">温度・top_k・ペナルティ・最大トークンはすぐ反映されます。CPUコア数と実行方式は「エンジンを再起動」で反映されます。設定はこの端末に保存されます。「設定リンクをコピー」すると、今の設定をURLで共有できます。</p>
+  <p class="note">温度・top_k・ペナルティ・最大トークンはすぐ反映されます。CPUコア数・実行方式・低メモリモードは「エンジンを再起動」で反映されます。低メモリモードは軽量モデル＋文脈256字＋スレッド1＋メモリ確保の抑制をまとめて行います。設定はこの端末に保存されます。「設定リンクをコピー」すると、今の設定をURLで共有できます。</p>
   <button id="set-reset">標準（B1.5）に戻す</button>
   <button id="set-restart">エンジンを再起動</button>
   <button id="set-share">設定リンクをコピー</button>
@@ -212,21 +213,19 @@ async function downloadWithProgress(url, sizeHint) {
   if (!r.ok) throw new Error("モデルの取得に失敗しました (" + r.status + ")");
   const total = Number(r.headers.get("Content-Length")) || sizeHint;
   const reader = r.body.getReader();
-  const chunks = []; let got = 0; const t0 = Date.now();
+  const merged = new Uint8Array(total); // 単一バッファに直接書き込む（ピークメモリ削減）
+  let got = 0; const t0 = Date.now();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value); got += value.length;
+    merged.set(value, got); got += value.length;
     const pct = Math.floor(got / total * 100);
     const rate = got / Math.max(1, (Date.now() - t0) / 1000); // B/s
     const eta = rate > 0 ? Math.ceil((total - got) / rate) : 0;
     const etaTxt = eta >= 60 ? `約${Math.ceil(eta / 60)}分` : `約${eta}秒`;
     setupStatusEl.textContent = `ダウンロード中… ${pct}%（${(got / 1048576).toFixed(0)}MB / ${(total / 1048576).toFixed(0)}MB・残り${etaTxt}）`;
   }
-  const merged = new Uint8Array(got);
-  let off = 0;
-  for (const c of chunks) { merged.set(c, off); off += c.length; }
-  return merged;
+  return got === total ? merged : merged.slice(0, got);
 }
 
 async function loadModelBytes() {
@@ -277,7 +276,7 @@ async function startWorkerOnce(bytes, cfg) {
         else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
       };
       worker.addEventListener('message', onMsg);
-      worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg, modelBytes: bufCopy }, [bufCopy]);
+      worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: effCfg(cfg || settings), modelBytes: bufCopy }, [bufCopy]);
     }),
     new Promise((_, rej) => setTimeout(() => rej(new Error('エンジン準備タイムアウト')), 75000)),
   ]);
@@ -355,7 +354,7 @@ startBtn.onclick = async () => {
     setupEl.style.display = "none";
     const epTxt = readyInfo && readyInfo.ep === 'webgpu' ? 'WebGPU' : 'CPU';
     const kvTxt = readyInfo && readyInfo.kv ? '高速モード' : '通常モード';
-    statusEl.textContent = `準備できました（${epTxt}・${kvTxt}）。話しかけてみてください。`;
+    statusEl.textContent = `準備できました（${epTxt}・${kvTxt}${settings.lowmem ? '・低メモリモード' : ''}）。話しかけてみてください。`;
     sendBtn.disabled = false; inp.focus();
   } catch (e) {
     stopTips();
@@ -416,9 +415,15 @@ if (sessionStorage.getItem("ochako-auto-start")) {
 }
 
 // ===== 生成の設定（端末に保存＋URL共有） =====
-const autoModel = (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'light' : 'standard';
+const autoLowMem = !!((navigator.deviceMemory && navigator.deviceMemory <= 2) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2));
+const autoModel = autoLowMem ? 'light' : ((navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'light' : 'standard');
 const autoThreads = 1; // 実測で1が最速。CDN配置のORTではスレッド用ワーカーが生成できず固まる環境があるため既定は1
-const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: autoThreads, ep: 'auto', model: autoModel };
+const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: autoLowMem ? 100 : 150, threads: autoThreads, ep: 'auto', model: autoModel, lowmem: autoLowMem };
+// ワーカーへ渡す実効設定（低メモリ時はスレッド1・文脈256に抑制）
+function effCfg(c) {
+  return { ...c, threads: c.lowmem ? 1 : c.threads, maxSeq: c.lowmem ? 256 : 512, lowMem: !!c.lowmem };
+}
+function cfgForWorker() { return effCfg(settings); }
 function loadSettings() {
   try { return { ...SETTING_DEFAULTS, ...JSON.parse(localStorage.getItem('ochako-settings') || '{}') }; }
   catch (e) { return { ...SETTING_DEFAULTS }; }
@@ -431,9 +436,10 @@ let settings = loadSettings();
   num('temp', 'temperature'); num('topk', 'topK'); num('rep', 'repPenalty'); num('maxnew', 'maxNew'); num('threads', 'threads');
   if (q.get('model') && MODEL_VARIANTS[q.get('model')]) settings.model = q.get('model');
   if (['auto', 'webgpu', 'wasm'].includes(q.get('ep'))) settings.ep = q.get('ep');
+  if (q.get('lowmem') === '1') settings.lowmem = true;
 })();
 function saveSettings() { try { localStorage.setItem('ochako-settings', JSON.stringify(settings)); } catch (e) {} }
-function pushConfig() { if (worker) worker.postMessage({ type: 'config', cfg: settings }); }
+function pushConfig() { if (worker) worker.postMessage({ type: 'config', cfg: cfgForWorker() }); }
 function syncSettingUI() {
   const map = { temp: 'temperature', topk: 'topK', rep: 'repPenalty', maxnew: 'maxNew', threads: 'threads' };
   for (const [id, key] of Object.entries(map)) {
@@ -446,9 +452,16 @@ function syncSettingUI() {
     };
   }
   document.getElementById('set-ep').value = settings.ep;
+  document.getElementById('set-lowmem').checked = !!settings.lowmem;
+  document.getElementById('lowmem-state').textContent = settings.lowmem ? 'ON（軽量モデル・文脈256・スレッド1）' : 'OFF';
   const radio = document.querySelector(`input[name="model"][value="${settings.model}"]`);
   if (radio) radio.checked = true;
 }
+document.getElementById('set-lowmem').onchange = (e) => {
+  settings.lowmem = e.target.checked;
+  if (settings.lowmem) settings.model = 'light';
+  saveSettings(); syncSettingUI(); pushConfig();
+};
 document.getElementById('set-ep').onchange = (e) => { settings.ep = e.target.value; saveSettings(); pushConfig(); };
 document.querySelectorAll('input[name="model"]').forEach(r => {
   r.addEventListener('change', () => {
@@ -478,7 +491,7 @@ document.getElementById('set-reset').onclick = () => {
   saveSettings(); syncSettingUI(); pushConfig();
 };
 document.getElementById('set-share').onclick = async () => {
-  const q = new URLSearchParams({ temp: settings.temperature, topk: settings.topK, rep: settings.repPenalty, maxnew: settings.maxNew, threads: settings.threads, model: settings.model, ep: settings.ep });
+  const q = new URLSearchParams({ temp: settings.temperature, topk: settings.topK, rep: settings.repPenalty, maxnew: settings.maxNew, threads: settings.threads, model: settings.model, ep: settings.ep, ...(settings.lowmem ? { lowmem: '1' } : {}) });
   const url = location.origin + location.pathname + '?' + q.toString();
   try { await navigator.clipboard.writeText(url); alert('設定リンクをコピーしました'); }
   catch (e) { prompt('このURLをコピーしてください', url); }
