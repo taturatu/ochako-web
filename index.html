@@ -81,8 +81,18 @@
 
 <script>
 // オフライン対応：アプリの殻をサービスワーカーでキャッシュする（機内モードでも開けるように）
+// 新バージョンの自動反映：定期的に更新チェックし、新しいSWが有効化されたら1回だけ自動リロードする
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-  navigator.serviceWorker.register("sw.js").catch(() => {});
+  navigator.serviceWorker.register("sw.js").then((reg) => {
+    reg.update();
+    setInterval(() => reg.update(), 60 * 60 * 1000);
+  }).catch(() => {});
+  let swReloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (swReloaded) return;
+    swReloaded = true;
+    location.reload();
+  });
 }
 </script>
 <script>
