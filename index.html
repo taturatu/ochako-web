@@ -254,18 +254,33 @@ async function loadModelBytes() {
 
 async function startWorker() {
   const bytes = await loadModelBytes();
+  try {
+    await startWorkerOnce(bytes, settings);
+  } catch (e) {
+    // スレッド数やWebGPUが原因で固まる環境があるため、安全設定（スレッド1・CPU）で1回だけ再試行する
+    if (settings.threads > 1 || settings.ep === 'webgpu') {
+      setupStatusEl.textContent = "準備に時間がかかったため、安全設定（スレッド1・CPU）で再試行しています…";
+      await startWorkerOnce(bytes, { ...settings, threads: 1, ep: 'wasm' });
+    } else { throw e; }
+  }
+}
+async function startWorkerOnce(bytes, cfg) {
   setupStatusEl.textContent = "モデルを準備しています…";
   if (worker) worker.terminate();
   worker = new Worker("worker.js");
   workerReady = false;
-  await new Promise((resolve, reject) => {
-    const onMsg = (e) => {
-      if (e.data.type === 'ready') { worker.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; resolve(); }
-      else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
-    };
-    worker.addEventListener('message', onMsg);
-    worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: settings, modelBytes: bytes.buffer }, [bytes.buffer]);
-  });
+  const bufCopy = bytes.buffer.slice(0);
+  await Promise.race([
+    new Promise((resolve, reject) => {
+      const onMsg = (e) => {
+        if (e.data.type === 'ready') { worker.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; resolve(); }
+        else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
+      };
+      worker.addEventListener('message', onMsg);
+      worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg, modelBytes: bufCopy }, [bufCopy]);
+    }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('エンジン準備タイムアウト')), 75000)),
+  ]);
   worker.addEventListener('message', onWorkerMessage);
 }
 
@@ -402,7 +417,7 @@ if (sessionStorage.getItem("ochako-auto-start")) {
 
 // ===== 生成の設定（端末に保存＋URL共有） =====
 const autoModel = (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'light' : 'standard';
-const autoThreads = window.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+const autoThreads = 1; // 実測で1が最速。CDN配置のORTではスレッド用ワーカーが生成できず固まる環境があるため既定は1
 const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: autoThreads, ep: 'auto', model: autoModel };
 function loadSettings() {
   try { return { ...SETTING_DEFAULTS, ...JSON.parse(localStorage.getItem('ochako-settings') || '{}') }; }
