@@ -6,7 +6,7 @@
 // - CDN の ONNX Runtime 一式（バージョン固定URL）は cache-first（変わらないファイルなので）。
 // - モデル本体はページ側の「ブラウザに保存」が担当（キャッシュ名 ochako-model-v1、ここでは触らない）。
 const SHELL_CACHE = "ochako-shell-v4";
-const DOC_URLS = ["./", "./index.html", "./vocab.json", "./worker.js"];
+const DOC_URLS = ["./", "./index.html", "./vocab.json", "./worker.js", "./model-version.json"];
 const CDN_URLS = [
   "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js",
   "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort-wasm-simd-threaded.wasm",

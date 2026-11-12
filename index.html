@@ -11,6 +11,11 @@
   #newchat { margin-left:auto; padding:9px 14px; border-radius:999px; border:1px solid #cfc9bf; background:#fff; font-size:14px; font-weight:400; cursor:pointer; font-family:inherit; }
   #newchat:active { background:#f0ede6; }
   header small { display:block; font-weight:400; color:#6b675f; margin-top:2px; }
+
+  #modelUpdate { max-width:760px; margin:16px auto 0; padding:14px 16px; background:#fdf6e3; border:1px solid #e3d29b; border-radius:14px; display:none; }
+  #modelUpdate p { margin:0 0 10px; font-size:14px; line-height:1.6; }
+  #modelUpdate button { padding:10px 16px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:14px; cursor:pointer; font-family:inherit; margin-right:8px; }
+  #modelUpdate #mu-now { background:#2f6f4f; color:#fff; border:0; }
   #setup { max-width:760px; margin:16px auto 0; padding:16px; background:#fff; border:1px solid #e5e1da; border-radius:14px; }
   #setup h2 { margin:0 0 8px; font-size:16px; }
   #setup p { margin:6px 0; font-size:14px; color:#44413c; line-height:1.6; }
@@ -47,6 +52,13 @@
 </head>
 <body>
 <header><div>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></div><button id="newchat">＋ 新しいチャット</button><button id="gear">⚙ 設定</button></header>
+
+
+<div id="modelUpdate">
+  <p id="mu-text"></p>
+  <button id="mu-now">今すぐ更新する</button>
+  <button id="mu-later">あとで</button>
+</div>
 
 <div id="setup">
   <h2>モデルの読み込み方法</h2>
@@ -147,6 +159,7 @@ async function loadModelBytes() {
     try {
       await cache.put(MODEL_URL, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
       setupStatusEl.textContent = "保存しました。次回からはダウンロードなしで使えます。";
+      if (remoteModel) localStorage.setItem("ochako-model-version", remoteModel.version);
     } catch (e) {
       setupStatusEl.textContent = "保存はできませんでしたが、今回はこのまま使えます。（端末の空き容量不足の可能性があります）";
     }
@@ -198,7 +211,7 @@ async function refreshCacheUI() {
   }
 }
 delBtn.onclick = async () => {
-  await caches.delete(CACHE_NAME);
+  await caches.delete(CACHE_NAME); localStorage.removeItem("ochako-model-version");
   setupStatusEl.textContent = "保存済みモデルを削除しました。";
   delBtn.style.display = "none";
 };
@@ -220,6 +233,49 @@ startBtn.onclick = async () => {
   }
 };
 refreshCacheUI();
+
+// ===== モデル更新の検知（モデルは確認制：勝手に再ダウンロードしない） =====
+let remoteModel = null;
+async function checkModelUpdate() {
+  if (!("caches" in window)) return;
+  try {
+    const r = await fetch("model-version.json", { cache: "no-store" });
+    if (!r.ok) return;
+    remoteModel = await r.json();
+  } catch (e) { return; }
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const hit = await cache.match(MODEL_URL);
+    if (!hit) return; // 保存済みモデルがある人だけが対象
+    const stored = localStorage.getItem("ochako-model-version");
+    if (stored === remoteModel.version) return;
+    if (sessionStorage.getItem("ochako-model-dismissed") === remoteModel.version) return;
+    const mb = Math.round((remoteModel.size || 270367948) / 1048576);
+    document.getElementById("mu-text").textContent =
+      `モデルのアップデートがあります（${remoteModel.label || remoteModel.version}）。更新すると約${mb}MBをダウンロードして、保存済みのモデルと入れ替えます。`;
+    document.getElementById("modelUpdate").style.display = "block";
+  } catch (e) {}
+}
+document.getElementById("mu-later").onclick = () => {
+  if (remoteModel) sessionStorage.setItem("ochako-model-dismissed", remoteModel.version);
+  document.getElementById("modelUpdate").style.display = "none";
+};
+document.getElementById("mu-now").onclick = async () => {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.delete(MODEL_URL);
+  } catch (e) {}
+  localStorage.removeItem("ochako-model-version");
+  document.getElementById("modelUpdate").style.display = "none";
+  if (!started) { startBtn.click(); }
+  else { sessionStorage.setItem("ochako-auto-start", "1"); location.reload(); }
+};
+checkModelUpdate();
+if (sessionStorage.getItem("ochako-auto-start")) {
+  sessionStorage.removeItem("ochako-auto-start");
+  setTimeout(() => { if (!started) startBtn.click(); }, 300);
+}
+
 
 // ===== 生成の設定（端末に保存） =====
 const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1 };
