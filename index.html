@@ -11,11 +11,13 @@
   #newchat { margin-left:auto; padding:9px 14px; border-radius:999px; border:1px solid #cfc9bf; background:#fff; font-size:14px; font-weight:400; cursor:pointer; font-family:inherit; }
   #newchat:active { background:#f0ede6; }
   header small { display:block; font-weight:400; color:#6b675f; margin-top:2px; }
-
-  #modelUpdate { max-width:760px; margin:16px auto 0; padding:14px 16px; background:#fdf6e3; border:1px solid #e3d29b; border-radius:14px; display:none; }
-  #modelUpdate p { margin:0 0 10px; font-size:14px; line-height:1.6; }
-  #modelUpdate button { padding:10px 16px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:14px; cursor:pointer; font-family:inherit; margin-right:8px; }
+  .banner { max-width:760px; margin:16px auto 0; padding:14px 16px; border-radius:14px; display:none; }
+  .banner p { margin:0 0 10px; font-size:14px; line-height:1.6; }
+  .banner button { padding:10px 16px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:14px; cursor:pointer; font-family:inherit; margin-right:8px; }
+  #modelUpdate { background:#fdf6e3; border:1px solid #e3d29b; }
   #modelUpdate #mu-now { background:#2f6f4f; color:#fff; border:0; }
+  #swUpdate { background:#e8f0fb; border:1px solid #b8cfee; }
+  #swUpdate #sw-now { background:#2b5ea7; color:#fff; border:0; }
   #setup { max-width:760px; margin:16px auto 0; padding:16px; background:#fff; border:1px solid #e5e1da; border-radius:14px; }
   #setup h2 { margin:0 0 8px; font-size:16px; }
   #setup p { margin:6px 0; font-size:14px; color:#44413c; line-height:1.6; }
@@ -26,26 +28,30 @@
   #start:disabled { opacity:.5; }
   #delcache { padding:8px 14px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:13px; margin-left:8px; display:none; }
   #setupStatus { margin-top:10px; font-size:13px; color:#6b675f; }
+  #tips { margin-top:8px; font-size:13px; color:#8a857a; min-height:1.4em; }
   #log { max-width:760px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
   .msg { padding:10px 14px; border-radius:14px; white-space:pre-wrap; line-height:1.6; max-width:85%; }
   .user { background:#e8f0e9; align-self:flex-end; }
   .bot { background:#fff; border:1px solid #e5e1da; align-self:flex-start; }
+  .meta { align-self:flex-start; font-size:11px; color:#9a958a; margin-top:-6px; }
   #bar { position:sticky; bottom:0; background:#f7f5f2; padding:12px 16px; }
   #bar div { max-width:760px; margin:0 auto; display:flex; gap:8px; }
   #inp { flex:1; padding:12px; border-radius:12px; border:1px solid #cfc9bf; font-size:16px; }
   #send { padding:12px 20px; border-radius:12px; border:0; background:#2f6f4f; color:#fff; font-size:16px; }
   #send.stop { background:#b0483a; }
   #send:disabled { opacity:.5; }
-
   #settings { max-width:760px; margin:12px auto 0; padding:16px; background:#fff; border:1px solid #e5e1da; border-radius:14px; display:none; }
   #settings.open { display:block; }
   #settings h2 { margin:0 0 6px; font-size:16px; }
+  #settings h3 { margin:16px 0 4px; font-size:14px; }
   #settings .row { display:flex; align-items:center; gap:10px; margin:10px 0; font-size:14px; }
   #settings .row label { width:150px; flex:none; }
   #settings .row input[type=range] { flex:1; }
+  #settings .row select { flex:1; padding:8px; border-radius:8px; border:1px solid #cfc9bf; font-family:inherit; font-size:14px; }
   #settings .row .val { width:44px; text-align:right; font-variant-numeric:tabular-nums; }
-  #settings .note { font-size:12px; color:#6b675f; }
-  #settings button { padding:9px 14px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:14px; cursor:pointer; font-family:inherit; margin-right:8px; }
+  #settings .note { font-size:12px; color:#6b675f; line-height:1.6; }
+  #settings button { padding:9px 14px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:14px; cursor:pointer; font-family:inherit; margin-right:8px; margin-bottom:6px; }
+  #settings button.preset { background:#eef5f0; }
   #gear { padding:9px 14px; border-radius:999px; border:1px solid #cfc9bf; background:#fff; font-size:14px; font-weight:400; cursor:pointer; font-family:inherit; }
   #status { max-width:760px; margin:8px auto 0; font-size:13px; color:#6b675f; }
 </style>
@@ -53,36 +59,60 @@
 <body>
 <header><div>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></div><button id="newchat">＋ 新しいチャット</button><button id="gear">⚙ 設定</button></header>
 
+<div id="swUpdate" class="banner">
+  <p>サイトの更新があります。更新しても会話とモデルはそのまま残ります。</p>
+  <button id="sw-now">更新する</button>
+  <button id="sw-later">あとで</button>
+</div>
 
-<div id="modelUpdate">
+<div id="modelUpdate" class="banner">
   <p id="mu-text"></p>
   <button id="mu-now">今すぐ更新する</button>
   <button id="mu-later">あとで</button>
 </div>
 
 <div id="setup">
-  <h2>モデルの読み込み方法</h2>
-  <p>モデルは約258MBあります。読み込み方法を選んでから「読み込み開始」を押してください。</p>
+  <h2>モデルの読み込み</h2>
+  <p>おちゃこは、サーバーではなく <b>あなたのブラウザの中だけ</b> で動く自作AIです。使う前にAIモデルを読み込みます。Wi-Fi環境がおすすめです。</p>
+  <h3 style="font-size:14px;margin:12px 0 4px;">モデルの種類</h3>
+  <label class="opt"><input type="radio" name="model" value="standard"> 標準（高精度・約258MB）
+    <small>FP32のフルモデル。いちばん高精度です。</small></label>
+  <label class="opt"><input type="radio" name="model" value="light"> 軽量（高速・約78MB）
+    <small>INT8量子化＋KVキャッシュ版。ダウンロードも生成も速く、スマホ・Chromebook向きです。</small></label>
+  <h3 style="font-size:14px;margin:12px 0 4px;">読み込み方法</h3>
   <label class="opt"><input type="radio" name="mode" value="cache" checked> ブラウザに保存して使う
     <small>初回だけダウンロードして、この端末のブラウザに保存します。次回からはダウンロードなしで、すぐ使えます。機内モードでも開けます。</small></label>
   <label class="opt"><input type="radio" name="mode" value="fresh"> 毎回ダウンロードする
-    <small>保存はしません。開くたびに約258MBをダウンロードします。</small></label>
+    <small>保存はしません。開くたびにダウンロードします。</small></label>
   <button id="start">読み込み開始</button>
   <button id="delcache">保存済みモデルを削除</button>
   <div id="setupStatus"></div>
+  <div id="tips"></div>
 </div>
-
 
 <div id="settings">
   <h2>生成の設定</h2>
+  <div>
+    <button class="preset" data-preset="steady">🎯 堅実</button>
+    <button class="preset" data-preset="balance">💬 バランス（標準）</button>
+    <button class="preset" data-preset="flash">🎨 ひらめき</button>
+  </div>
   <div class="row"><label>温度（ランダムさ）</label><input type="range" id="set-temp" min="0.1" max="1.5" step="0.05"><span class="val" id="val-temp"></span></div>
   <div class="row"><label>top_k（候補の数）</label><input type="range" id="set-topk" min="1" max="100" step="1"><span class="val" id="val-topk"></span></div>
   <div class="row"><label>繰り返しペナルティ</label><input type="range" id="set-rep" min="1" max="1.5" step="0.01"><span class="val" id="val-rep"></span></div>
   <div class="row"><label>最大トークン数</label><input type="range" id="set-maxnew" min="10" max="300" step="5"><span class="val" id="val-maxnew"></span></div>
   <div class="row"><label>CPUコア数（スレッド）</label><input type="range" id="set-threads" min="1" max="8" step="1"><span class="val" id="val-threads"></span></div>
-  <p class="note">温度・top_k・ペナルティ・最大トークンはすぐ反映されます。CPUコア数は「エンジンを再起動」で反映されます（実測では1が最速でした）。設定はこの端末に保存されます。</p>
+  <div class="row"><label>実行方式</label><select id="set-ep">
+    <option value="auto">自動（WebGPUがあれば使う）</option>
+    <option value="webgpu">WebGPU</option>
+    <option value="wasm">CPU（WASM）</option>
+  </select></div>
+  <p class="note">温度・top_k・ペナルティ・最大トークンはすぐ反映されます。CPUコア数と実行方式は「エンジンを再起動」で反映されます。設定はこの端末に保存されます。「設定リンクをコピー」すると、今の設定をURLで共有できます。</p>
   <button id="set-reset">標準（B1.5）に戻す</button>
   <button id="set-restart">エンジンを再起動</button>
+  <button id="set-share">設定リンクをコピー</button>
+  <h3>保存済みモデル</h3>
+  <div id="cacheBox" class="note">確認中…</div>
 </div>
 
 <div id="log"></div>
@@ -92,54 +122,106 @@
 </div><div id="status"></div></div>
 
 <script>
-// オフライン対応：アプリの殻をサービスワーカーでキャッシュする（機内モードでも開けるように）
-// 新バージョンの自動反映：定期的に更新チェックし、新しいSWが有効化されたら1回だけ自動リロードする
+// ===== サービスワーカー（殻のオフライン対応＋更新は通知ボタン方式） =====
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let swWaiting = null, swReloading = false;
+  const swBanner = document.getElementById('swUpdate');
+  function offerSwUpdate(reg) {
+    if (!reg.waiting) return;
+    swWaiting = reg.waiting;
+    swBanner.style.display = 'block';
+  }
   navigator.serviceWorker.register("sw.js").then((reg) => {
     reg.update();
     setInterval(() => reg.update(), 60 * 60 * 1000);
+    if (reg.waiting && hadController) offerSwUpdate(reg);
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && hadController) offerSwUpdate(reg);
+      });
+    });
   }).catch(() => {});
-  let swReloaded = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (swReloaded) return;
-    swReloaded = true;
-    location.reload();
+  document.getElementById('sw-now').onclick = () => { if (swWaiting) swWaiting.postMessage('SKIP_WAITING'); };
+  document.getElementById('sw-later').onclick = () => { swBanner.style.display = 'none'; };
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swReloading) return;
+    // 初回導入時（元々コントローラなし）だけ、crossOriginIsolated 有効化のために1回リロード
+    if (!hadController && !window.crossOriginIsolated && !sessionStorage.getItem('coi-tried')) {
+      sessionStorage.setItem('coi-tried', '1');
+      swReloading = true; location.reload(); return;
+    }
+    // ユーザーが「更新する」を押した後の切り替えでリロード
+    if (swWaiting) { swReloading = true; location.reload(); }
   });
 }
 </script>
 <script>
-// ===== 設定 =====
-// モデルは Hugging Face 上の単一ファイル model.onnx を URL で読み込む。
-// 推論は Web Worker で実行する（画面が固まらないように）。
-const MODEL_URL = "https://huggingface.co/tamasann/ochako-v3/resolve/main/model.onnx";
+// ===== 基本設定 =====
+const HF_BASE = "https://huggingface.co/tamasann/ochako-v3/resolve/main/";
+const MODEL_VARIANTS = {
+  standard: { url: HF_BASE + "model.onnx",    size: 270367948, label: "標準（高精度）" },
+  light:    { url: HF_BASE + "model_int8.onnx", size: 81367968, label: "軽量（高速）" },
+};
 const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
 const CACHE_NAME = "ochako-model-v1";
 const VOCAB_URL = "vocab.json";
 
 let itos = [], worker = null, workerReady = false, loadMode = "cache";
 let history = [];
-let generating = false, currentResolve = null, currentBubble = null, genTimer = null;
+let generating = false, currentResolve = null, currentBubble = null, genTimer = null, readyInfo = null;
 const logEl = document.getElementById('log'), inp = document.getElementById('inp'),
       sendBtn = document.getElementById('send'), statusEl = document.getElementById('status'),
       setupEl = document.getElementById('setup'), setupStatusEl = document.getElementById('setupStatus'),
-      startBtn = document.getElementById('start'), delBtn = document.getElementById('delcache');
+      startBtn = document.getElementById('start'), delBtn = document.getElementById('delcache'),
+      tipsEl = document.getElementById('tips');
+
+const modelUrl = () => MODEL_VARIANTS[settings.model].url;
+const versionKey = () => "ochako-model-version-" + settings.model;
 
 function addMsg(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   logEl.appendChild(d); window.scrollTo(0, document.body.scrollHeight); return d;
 }
+function addMeta(text) {
+  const d = document.createElement('div'); d.className = 'meta'; d.textContent = text;
+  logEl.appendChild(d); window.scrollTo(0, document.body.scrollHeight); return d;
+}
 
-async function downloadWithProgress() {
-  const r = await fetch(MODEL_URL);
+// ===== 待ち時間の読み物 =====
+const TIPS = [
+  "💡 おちゃこは約6,360万パラメータの自作Transformer。大きなAIの「蒸留」ではなく、ゼロから学習しています。",
+  "💡 文字単位トークナイザ採用。1文字ずつ読んで、1文字ずつ考えて返事を作ります。",
+  "💡 会話は「ユーザー：… AI：…」という型で学習しました。この型でプロンプトを組むと一番よく喋ります。",
+  "💡 推論はすべてこの端末の中で完結します。入力した文章がサーバーに送られることはありません。",
+  "💡 軽量モデルはINT8量子化で約78MB。精度を保ったまま約1/3に圧縮されています。",
+  "💡 2回目以降の会話は、前回の計算結果（KVキャッシュ）を再利用して初動を速くしています。",
+  "💡 設定（⚙）から温度やtop_kを変えると、返事の性格が変わります。「ひらめき」は温度0.95です。",
+];
+let tipsTimer = null, tipsIdx = 0;
+function startTips() {
+  tipsEl.textContent = TIPS[tipsIdx++ % TIPS.length];
+  tipsTimer = setInterval(() => { tipsEl.textContent = TIPS[tipsIdx++ % TIPS.length]; }, 6000);
+}
+function stopTips() { clearInterval(tipsTimer); tipsEl.textContent = ""; }
+
+async function downloadWithProgress(url, sizeHint) {
+  const r = await fetch(url);
   if (!r.ok) throw new Error("モデルの取得に失敗しました (" + r.status + ")");
-  const total = Number(r.headers.get("Content-Length")) || 270367948;
+  const total = Number(r.headers.get("Content-Length")) || sizeHint;
   const reader = r.body.getReader();
-  const chunks = []; let got = 0;
+  const chunks = []; let got = 0; const t0 = Date.now();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value); got += value.length;
-    setupStatusEl.textContent = `ダウンロード中… ${(got / 1048576).toFixed(0)}MB / ${(total / 1048576).toFixed(0)}MB`;
+    const pct = Math.floor(got / total * 100);
+    const rate = got / Math.max(1, (Date.now() - t0) / 1000); // B/s
+    const eta = rate > 0 ? Math.ceil((total - got) / rate) : 0;
+    const etaTxt = eta >= 60 ? `約${Math.ceil(eta / 60)}分` : `約${eta}秒`;
+    setupStatusEl.textContent = `ダウンロード中… ${pct}%（${(got / 1048576).toFixed(0)}MB / ${(total / 1048576).toFixed(0)}MB・残り${etaTxt}）`;
   }
   const merged = new Uint8Array(got);
   let off = 0;
@@ -148,24 +230,26 @@ async function downloadWithProgress() {
 }
 
 async function loadModelBytes() {
+  const url = modelUrl(), size = MODEL_VARIANTS[settings.model].size;
   if (loadMode === "cache" && "caches" in window) {
     const cache = await caches.open(CACHE_NAME);
-    const hit = await cache.match(MODEL_URL);
+    const hit = await cache.match(url);
     if (hit) {
       setupStatusEl.textContent = "保存済みモデルを使います（ダウンロードなし）";
       return new Uint8Array(await hit.arrayBuffer());
     }
-    const bytes = await downloadWithProgress();
+    const bytes = await downloadWithProgress(url, size);
     try {
-      await cache.put(MODEL_URL, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
+      await cache.put(url, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
       setupStatusEl.textContent = "保存しました。次回からはダウンロードなしで使えます。";
-      if (remoteModel) localStorage.setItem("ochako-model-version", remoteModel.version);
+      const rv = remoteVariant();
+      if (rv) localStorage.setItem(versionKey(), rv.version);
     } catch (e) {
       setupStatusEl.textContent = "保存はできませんでしたが、今回はこのまま使えます。（端末の空き容量不足の可能性があります）";
     }
     return bytes;
   }
-  return downloadWithProgress();
+  return downloadWithProgress(url, size);
 }
 
 async function startWorker() {
@@ -176,7 +260,7 @@ async function startWorker() {
   workerReady = false;
   await new Promise((resolve, reject) => {
     const onMsg = (e) => {
-      if (e.data.type === 'ready') { worker.removeEventListener('message', onMsg); workerReady = true; resolve(); }
+      if (e.data.type === 'ready') { worker.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; resolve(); }
       else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
     };
     worker.addEventListener('message', onMsg);
@@ -187,103 +271,152 @@ async function startWorker() {
 
 function onWorkerMessage(e) {
   const m = e.data;
-  if (m.type === 'token' && currentBubble) {
+  if (m.type === 'partial' && currentBubble) {
     currentBubble.textContent = m.text;
     window.scrollTo(0, document.body.scrollHeight);
   } else if (m.type === 'done' && currentResolve) {
     const r = currentResolve; currentResolve = null;
-    r(m.text);
+    r(m.text, null, m.stats);
   } else if (m.type === 'error' && currentResolve) {
     const r = currentResolve; currentResolve = null;
-    r(null, new Error(m.message));
+    r(null, new Error(m.message), null);
   }
 }
 
-async function refreshCacheUI() {
-  if (!("caches" in window)) return;
+async function cacheState() {
+  const out = {};
+  if (!("caches" in window)) return out;
   const cache = await caches.open(CACHE_NAME);
-  const hit = await cache.match(MODEL_URL);
-  if (hit) {
+  for (const [key, v] of Object.entries(MODEL_VARIANTS)) out[key] = !!(await cache.match(v.url));
+  return out;
+}
+async function refreshCacheUI() {
+  const st = await cacheState();
+  delBtn.style.display = st[settings.model] ? "inline-block" : "none";
+  if (st[settings.model]) {
     setupStatusEl.textContent = "この端末に保存済みのモデルがあります。「ブラウザに保存して使う」のままで開始すると、ダウンロードなしで使えます。";
-    delBtn.style.display = "inline-block";
-  } else {
-    delBtn.style.display = "none";
+  }
+  const box = document.getElementById('cacheBox');
+  if (box) {
+    box.innerHTML = "";
+    for (const [key, v] of Object.entries(MODEL_VARIANTS)) {
+      const line = document.createElement('div');
+      line.textContent = `${v.label}：${st[key] ? `保存済み（約${Math.round(v.size / 1048576)}MB）` : "未保存"} `;
+      if (st[key]) {
+        const b = document.createElement('button');
+        b.textContent = "削除";
+        b.onclick = async () => {
+          const cache = await caches.open(CACHE_NAME);
+          await cache.delete(v.url);
+          localStorage.removeItem("ochako-model-version-" + key);
+          refreshCacheUI();
+        };
+        line.appendChild(b);
+      }
+      box.appendChild(line);
+    }
   }
 }
 delBtn.onclick = async () => {
-  await caches.delete(CACHE_NAME); localStorage.removeItem("ochako-model-version");
+  const cache = await caches.open(CACHE_NAME);
+  await cache.delete(modelUrl());
+  localStorage.removeItem(versionKey());
   setupStatusEl.textContent = "保存済みモデルを削除しました。";
-  delBtn.style.display = "none";
+  refreshCacheUI();
 };
 
 let started = false;
 startBtn.onclick = async () => {
   if (started) return; started = true; startBtn.disabled = true;
   loadMode = document.querySelector('input[name="mode"]:checked').value;
+  settings.model = document.querySelector('input[name="model"]:checked').value;
+  saveSettings();
+  startTips();
   try {
     const v = await (await fetch(VOCAB_URL)).json();
     itos = v.itos;
     await startWorker();
+    stopTips();
     setupEl.style.display = "none";
-    statusEl.textContent = '準備できました。話しかけてみてください。';
+    const epTxt = readyInfo && readyInfo.ep === 'webgpu' ? 'WebGPU' : 'CPU';
+    const kvTxt = readyInfo && readyInfo.kv ? '高速モード' : '通常モード';
+    statusEl.textContent = `準備できました（${epTxt}・${kvTxt}）。話しかけてみてください。`;
     sendBtn.disabled = false; inp.focus();
   } catch (e) {
-    setupStatusEl.textContent = '読み込みに失敗しました: ' + e.message;
+    stopTips();
+    setupStatusEl.textContent = '読み込みに失敗しました: ' + e.message + (settings.model === 'light' ? '（軽量モデルがまだ公開されていない場合は、標準モデルを選んでください）' : '');
     started = false; startBtn.disabled = false;
   }
 };
-refreshCacheUI();
 
 // ===== モデル更新の検知（モデルは確認制：勝手に再ダウンロードしない） =====
 let remoteModel = null;
+function remoteVariant() {
+  if (!remoteModel) return null;
+  if (remoteModel.variants) return remoteModel.variants[settings.model] || null;
+  return settings.model === 'standard' ? remoteModel : null; // 旧形式は標準のみ
+}
 async function checkModelUpdate() {
   if (!("caches" in window)) return;
-  try {
-    const r = await fetch("model-version.json", { cache: "no-store" });
-    if (!r.ok) return;
-    remoteModel = await r.json();
-  } catch (e) { return; }
+  if (!remoteModel) {
+    try {
+      const r = await fetch("model-version.json", { cache: "no-store" });
+      if (!r.ok) return;
+      remoteModel = await r.json();
+    } catch (e) { return; }
+  }
+  const rv = remoteVariant();
+  if (!rv) return;
   try {
     const cache = await caches.open(CACHE_NAME);
-    const hit = await cache.match(MODEL_URL);
-    if (!hit) return; // 保存済みモデルがある人だけが対象
-    const stored = localStorage.getItem("ochako-model-version");
-    if (stored === remoteModel.version) return;
-    if (sessionStorage.getItem("ochako-model-dismissed") === remoteModel.version) return;
-    const mb = Math.round((remoteModel.size || 270367948) / 1048576);
+    const hit = await cache.match(modelUrl());
+    if (!hit) return;
+    const stored = localStorage.getItem(versionKey());
+    if (stored === rv.version) return;
+    if (sessionStorage.getItem("ochako-model-dismissed") === rv.version) return;
+    const mb = Math.round((rv.size || MODEL_VARIANTS[settings.model].size) / 1048576);
     document.getElementById("mu-text").textContent =
-      `モデルのアップデートがあります（${remoteModel.label || remoteModel.version}）。更新すると約${mb}MBをダウンロードして、保存済みのモデルと入れ替えます。`;
+      `モデルのアップデートがあります（${rv.label || rv.version}）。更新すると約${mb}MBをダウンロードして、保存済みのモデルと入れ替えます。`;
     document.getElementById("modelUpdate").style.display = "block";
   } catch (e) {}
 }
 document.getElementById("mu-later").onclick = () => {
-  if (remoteModel) sessionStorage.setItem("ochako-model-dismissed", remoteModel.version);
+  const rv = remoteVariant();
+  if (rv) sessionStorage.setItem("ochako-model-dismissed", rv.version);
   document.getElementById("modelUpdate").style.display = "none";
 };
 document.getElementById("mu-now").onclick = async () => {
   try {
     const cache = await caches.open(CACHE_NAME);
-    await cache.delete(MODEL_URL);
+    await cache.delete(modelUrl());
   } catch (e) {}
-  localStorage.removeItem("ochako-model-version");
+  localStorage.removeItem(versionKey());
   document.getElementById("modelUpdate").style.display = "none";
   if (!started) { startBtn.click(); }
   else { sessionStorage.setItem("ochako-auto-start", "1"); location.reload(); }
 };
-checkModelUpdate();
 if (sessionStorage.getItem("ochako-auto-start")) {
   sessionStorage.removeItem("ochako-auto-start");
   setTimeout(() => { if (!started) startBtn.click(); }, 300);
 }
 
-
-// ===== 生成の設定（端末に保存） =====
-const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1 };
+// ===== 生成の設定（端末に保存＋URL共有） =====
+const autoModel = (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'light' : 'standard';
+const autoThreads = window.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: autoThreads, ep: 'auto', model: autoModel };
 function loadSettings() {
   try { return { ...SETTING_DEFAULTS, ...JSON.parse(localStorage.getItem('ochako-settings') || '{}') }; }
   catch (e) { return { ...SETTING_DEFAULTS }; }
 }
 let settings = loadSettings();
+// URLパラメータでの設定共有（?temp=0.8&topk=50 など）
+(function applyUrlParams() {
+  const q = new URLSearchParams(location.search);
+  const num = (key, field) => { const v = q.get(key); if (v !== null && !Number.isNaN(Number(v))) settings[field] = Number(v); };
+  num('temp', 'temperature'); num('topk', 'topK'); num('rep', 'repPenalty'); num('maxnew', 'maxNew'); num('threads', 'threads');
+  if (q.get('model') && MODEL_VARIANTS[q.get('model')]) settings.model = q.get('model');
+  if (['auto', 'webgpu', 'wasm'].includes(q.get('ep'))) settings.ep = q.get('ep');
+})();
 function saveSettings() { try { localStorage.setItem('ochako-settings', JSON.stringify(settings)); } catch (e) {} }
 function pushConfig() { if (worker) worker.postMessage({ type: 'config', cfg: settings }); }
 function syncSettingUI() {
@@ -297,10 +430,47 @@ function syncSettingUI() {
       saveSettings(); pushConfig();
     };
   }
+  document.getElementById('set-ep').value = settings.ep;
+  const radio = document.querySelector(`input[name="model"][value="${settings.model}"]`);
+  if (radio) radio.checked = true;
 }
-document.getElementById('gear').onclick = () => document.getElementById('settings').classList.toggle('open');
-document.getElementById('set-reset').onclick = () => { settings = { ...SETTING_DEFAULTS }; saveSettings(); syncSettingUI(); pushConfig(); };
+document.getElementById('set-ep').onchange = (e) => { settings.ep = e.target.value; saveSettings(); pushConfig(); };
+document.querySelectorAll('input[name="model"]').forEach(r => {
+  r.addEventListener('change', () => {
+    settings.model = r.value; saveSettings();
+    document.getElementById('modelUpdate').style.display = 'none';
+    refreshCacheUI(); checkModelUpdate();
+    if (started) { sessionStorage.setItem('ochako-auto-start', '1'); location.reload(); }
+  });
+});
+const PRESETS = {
+  steady:  { temperature: 0.3,  topK: 20, repPenalty: 1.15 },
+  balance: { temperature: 0.65, topK: 40, repPenalty: 1.15 },
+  flash:   { temperature: 0.95, topK: 60, repPenalty: 1.1 },
+};
+document.querySelectorAll('.preset').forEach(b => {
+  b.onclick = () => {
+    Object.assign(settings, PRESETS[b.dataset.preset]);
+    saveSettings(); syncSettingUI(); pushConfig();
+  };
+});
+document.getElementById('gear').onclick = () => {
+  document.getElementById('settings').classList.toggle('open');
+  refreshCacheUI();
+};
+document.getElementById('set-reset').onclick = () => {
+  settings = { ...settings, temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150 };
+  saveSettings(); syncSettingUI(); pushConfig();
+};
+document.getElementById('set-share').onclick = async () => {
+  const q = new URLSearchParams({ temp: settings.temperature, topk: settings.topK, rep: settings.repPenalty, maxnew: settings.maxNew, threads: settings.threads, model: settings.model, ep: settings.ep });
+  const url = location.origin + location.pathname + '?' + q.toString();
+  try { await navigator.clipboard.writeText(url); alert('設定リンクをコピーしました'); }
+  catch (e) { prompt('このURLをコピーしてください', url); }
+};
 syncSettingUI();
+refreshCacheUI();
+checkModelUpdate();
 
 document.getElementById('set-restart').onclick = async () => {
   if (generating || !started) return;
@@ -309,7 +479,6 @@ document.getElementById('set-restart').onclick = async () => {
   catch (e) { statusEl.textContent = '再起動に失敗しました: ' + e.message; }
   sendBtn.disabled = false;
 };
-
 
 function setGenerating(on, bubble) {
   generating = on; currentBubble = bubble || null;
@@ -332,12 +501,15 @@ async function doSend() {
   const bubble = addMsg('考え中…', 'bot');
   setGenerating(true, bubble);
   try {
-    const out = await new Promise((resolve, reject) => {
-      currentResolve = (t, err) => err ? reject(err) : resolve(t);
-      worker.postMessage({ type: 'generate', id: 1, history });
+    const { out, stats } = await new Promise((resolve, reject) => {
+      currentResolve = (t, err, st) => err ? reject(err) : resolve({ out: t, stats: st });
+      worker.postMessage({ type: 'generate', history });
     });
     bubble.textContent = out || '（応答が生成できませんでした）';
-    if (out) history.push({ role: 'assistant', text: out });
+    if (out) {
+      history.push({ role: 'assistant', text: out });
+      if (stats) addMeta(`${stats.tps} tok/s ・ 文脈 ${stats.ctx}/${stats.ctxMax} 字${stats.reused > 0 ? ` ・ 前回の計算を ${stats.reused} 字ぶん再利用` : ''}`);
+    }
   } catch (e) { bubble.textContent = 'エラー: ' + e.message; history.pop(); }
   setGenerating(false);
   inp.focus();
@@ -345,20 +517,19 @@ async function doSend() {
 
 async function doStop() {
   if (!generating) return;
-  if (currentBubble) currentBubble.textContent += '（停止しました）';
-  currentResolve = null;
-  setGenerating(false);
-  statusEl.textContent = '再準備しています…';
-  sendBtn.disabled = true;
-  try { await startWorker(); statusEl.textContent = '準備できました。'; }
-  catch (e) { statusEl.textContent = '再準備に失敗しました: ' + e.message; }
-  sendBtn.disabled = false;
+  worker.postMessage({ type: 'stop' });
+  if (currentResolve) {
+    const r = currentResolve; currentResolve = null;
+    const partial = currentBubble ? currentBubble.textContent : '';
+    r(partial && partial !== '考え中…' ? partial : '', null, null);
+  }
 }
 
 sendBtn.onclick = () => { if (generating) doStop(); else doSend(); };
 document.getElementById('newchat').onclick = () => {
   if (generating) return;
   history = []; logEl.innerHTML = '';
+  if (worker) worker.postMessage({ type: 'reset' });
   statusEl.textContent = '新しいチャットを始めました。話しかけてみてください。';
   inp.focus();
 };
