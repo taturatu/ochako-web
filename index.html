@@ -31,11 +31,22 @@
   #send { padding:12px 20px; border-radius:12px; border:0; background:#2f6f4f; color:#fff; font-size:16px; }
   #send.stop { background:#b0483a; }
   #send:disabled { opacity:.5; }
+
+  #settings { max-width:760px; margin:12px auto 0; padding:16px; background:#fff; border:1px solid #e5e1da; border-radius:14px; display:none; }
+  #settings.open { display:block; }
+  #settings h2 { margin:0 0 6px; font-size:16px; }
+  #settings .row { display:flex; align-items:center; gap:10px; margin:10px 0; font-size:14px; }
+  #settings .row label { width:150px; flex:none; }
+  #settings .row input[type=range] { flex:1; }
+  #settings .row .val { width:44px; text-align:right; font-variant-numeric:tabular-nums; }
+  #settings .note { font-size:12px; color:#6b675f; }
+  #settings button { padding:9px 14px; border-radius:10px; border:1px solid #cfc9bf; background:#fff; font-size:14px; cursor:pointer; font-family:inherit; margin-right:8px; }
+  #gear { padding:9px 14px; border-radius:999px; border:1px solid #cfc9bf; background:#fff; font-size:14px; font-weight:400; cursor:pointer; font-family:inherit; }
   #status { max-width:760px; margin:8px auto 0; font-size:13px; color:#6b675f; }
 </style>
 </head>
 <body>
-<header><div>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></div><button id="newchat">＋ 新しいチャット</button></header>
+<header><div>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></div><button id="newchat">＋ 新しいチャット</button><button id="gear">⚙ 設定</button></header>
 
 <div id="setup">
   <h2>モデルの読み込み方法</h2>
@@ -47,6 +58,19 @@
   <button id="start">読み込み開始</button>
   <button id="delcache">保存済みモデルを削除</button>
   <div id="setupStatus"></div>
+</div>
+
+
+<div id="settings">
+  <h2>生成の設定</h2>
+  <div class="row"><label>温度（ランダムさ）</label><input type="range" id="set-temp" min="0.1" max="1.5" step="0.05"><span class="val" id="val-temp"></span></div>
+  <div class="row"><label>top_k（候補の数）</label><input type="range" id="set-topk" min="1" max="100" step="1"><span class="val" id="val-topk"></span></div>
+  <div class="row"><label>繰り返しペナルティ</label><input type="range" id="set-rep" min="1" max="1.5" step="0.01"><span class="val" id="val-rep"></span></div>
+  <div class="row"><label>最大トークン数</label><input type="range" id="set-maxnew" min="10" max="300" step="5"><span class="val" id="val-maxnew"></span></div>
+  <div class="row"><label>CPUコア数（スレッド）</label><input type="range" id="set-threads" min="1" max="8" step="1"><span class="val" id="val-threads"></span></div>
+  <p class="note">温度・top_k・ペナルティ・最大トークンはすぐ反映されます。CPUコア数は「エンジンを再起動」で反映されます（実測では1が最速でした）。設定はこの端末に保存されます。</p>
+  <button id="set-reset">標準（B1.5）に戻す</button>
+  <button id="set-restart">エンジンを再起動</button>
 </div>
 
 <div id="log"></div>
@@ -133,7 +157,7 @@ async function startWorker() {
       else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
     };
     worker.addEventListener('message', onMsg);
-    worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, modelBytes: bytes.buffer }, [bytes.buffer]);
+    worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: settings, modelBytes: bytes.buffer }, [bytes.buffer]);
   });
   worker.addEventListener('message', onWorkerMessage);
 }
@@ -186,6 +210,40 @@ startBtn.onclick = async () => {
   }
 };
 refreshCacheUI();
+
+// ===== 生成の設定（端末に保存） =====
+const SETTING_DEFAULTS = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1 };
+function loadSettings() {
+  try { return { ...SETTING_DEFAULTS, ...JSON.parse(localStorage.getItem('ochako-settings') || '{}') }; }
+  catch (e) { return { ...SETTING_DEFAULTS }; }
+}
+let settings = loadSettings();
+function saveSettings() { try { localStorage.setItem('ochako-settings', JSON.stringify(settings)); } catch (e) {} }
+function pushConfig() { if (worker) worker.postMessage({ type: 'config', cfg: settings }); }
+function syncSettingUI() {
+  const map = { temp: 'temperature', topk: 'topK', rep: 'repPenalty', maxnew: 'maxNew', threads: 'threads' };
+  for (const [id, key] of Object.entries(map)) {
+    const el = document.getElementById('set-' + id), val = document.getElementById('val-' + id);
+    if (!el) continue;
+    el.value = settings[key]; val.textContent = settings[key];
+    el.oninput = () => {
+      settings[key] = Number(el.value); val.textContent = el.value;
+      saveSettings(); pushConfig();
+    };
+  }
+}
+document.getElementById('gear').onclick = () => document.getElementById('settings').classList.toggle('open');
+document.getElementById('set-reset').onclick = () => { settings = { ...SETTING_DEFAULTS }; saveSettings(); syncSettingUI(); pushConfig(); };
+syncSettingUI();
+
+document.getElementById('set-restart').onclick = async () => {
+  if (generating || !started) return;
+  sendBtn.disabled = true; statusEl.textContent = 'エンジンを再起動しています…';
+  try { await startWorker(); statusEl.textContent = '準備できました。話しかけてみてください。'; }
+  catch (e) { statusEl.textContent = '再起動に失敗しました: ' + e.message; }
+  sendBtn.disabled = false;
+};
+
 
 function setGenerating(on, bubble) {
   generating = on; currentBubble = bubble || null;

@@ -7,7 +7,9 @@
 let session = null, itos = [], kvMode = false;
 let stoi = new Map();
 
-const TEMPERATURE = 0.65, TOP_K = 40, REP_PENALTY = 1.15, MAX_NEW = 150, MAX_SEQ = 512;
+const MAX_SEQ = 512;
+// デコード設定（標準は製品標準 B1.5。画面から変更できる）
+let CFG = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1 };
 const BOS = 1, EOS = 2;
 const NL = 12, NH = 10, HD = 64;
 
@@ -38,10 +40,10 @@ function sampleNext(logitsArr, ids, rand) {
   const V = itos.length;
   let last = Array.from(logitsArr);
   const seen = new Set(ids.slice(1));
-  for (const t of seen) { if (last[t] > 0) last[t] /= REP_PENALTY; else last[t] *= REP_PENALTY; }
-  for (let i = 0; i < V; i++) last[i] /= TEMPERATURE;
+  for (const t of seen) { if (last[t] > 0) last[t] /= CFG.repPenalty; else last[t] *= CFG.repPenalty; }
+  for (let i = 0; i < V; i++) last[i] /= CFG.temperature;
   const sorted = [...last].sort((a, b) => b - a);
-  const thresh = sorted[Math.min(TOP_K, V) - 1];
+  const thresh = sorted[Math.min(CFG.topK, V) - 1];
   let max = -Infinity; for (let i = 0; i < V; i++) if (last[i] >= thresh && last[i] > max) max = last[i];
   let sum = 0; const probs = new Float64Array(V);
   for (let i = 0; i < V; i++) { if (last[i] >= thresh) { probs[i] = Math.exp(last[i] - max); sum += probs[i]; } }
@@ -53,14 +55,19 @@ function sampleNext(logitsArr, ids, rand) {
 self.onmessage = async (e) => {
   const m = e.data;
   try {
+    if (m.type === 'config') {
+      if (m.cfg) CFG = { ...CFG, ...m.cfg };
+      return;
+    }
     if (m.type === 'init') {
+      if (m.cfg) CFG = { ...CFG, ...m.cfg };
       importScripts(m.ortBase + 'ort.min.js');
       ort.env.wasm.wasmPaths = m.ortBase;
       itos = m.itos;
       itos.forEach((c, i) => { if (c !== null && c !== undefined) stoi.set(c, i); });
       // 実測では単一スレッドが最速だった（共有CPUではスレッド追加が逆効果）。
       // また SharedArrayBuffer が無い環境での不安定さも避けられる。
-      ort.env.wasm.numThreads = 1;
+      ort.env.wasm.numThreads = CFG.threads;
       session = await ort.InferenceSession.create(new Uint8Array(m.modelBytes), { executionProviders: ['wasm'] });
       kvMode = session.inputNames.includes('offset');
       self.postMessage({ type: 'ready', kv: kvMode });
@@ -84,7 +91,7 @@ async function generateFull(history) {
   const rand = mulberry32((Math.random() * 2 ** 31) | 0);
   let ids = promptIds(history);
   const outIds = [];
-  for (let step = 0; step < MAX_NEW; step++) {
+  for (let step = 0; step < CFG.maxNew; step++) {
     const ctx = ids.slice(-MAX_SEQ);
     const input = new ort.Tensor('int64', BigInt64Array.from(ctx.map(BigInt)), [1, ctx.length]);
     const res = await session.run({ idx: input });
@@ -122,7 +129,7 @@ async function generateKV(history) {
   let lastLogits = res.logits.data.slice((ids.length - 1) * V, ids.length * V);
   pasts = {};
   for (let i = 0; i < NL; i++) { pasts[`past_k_${i}`] = res[`present_k_${i}`]; pasts[`past_v_${i}`] = res[`present_v_${i}`]; }
-  for (let step = 0; step < MAX_NEW; step++) {
+  for (let step = 0; step < CFG.maxNew; step++) {
     const nxt = sampleNext(lastLogits, ids, rand);
     if (nxt === EOS) break;
     if (itos[nxt] === null || itos[nxt] === undefined) break;
@@ -130,7 +137,7 @@ async function generateKV(history) {
     const text = outIds.map(i => itos[i] ?? '').join('');
     if (text.includes('\nユーザー：') || text.includes('\nAI：')) break;
     self.postMessage({ type: 'token', text: clean(text) });
-    if (step === MAX_NEW - 1 || pastLen + 1 >= MAX_SEQ) break;
+    if (step === CFG.maxNew - 1 || pastLen + 1 >= MAX_SEQ) break;
     const feed2 = {
       idx: new ort.Tensor('int64', BigInt64Array.from([BigInt(nxt)]), [1, 1]),
       offset: new ort.Tensor('int64', BigInt64Array.from([BigInt(pastLen)]), []),
