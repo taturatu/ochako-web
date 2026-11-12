@@ -177,11 +177,18 @@ self.onmessage = async (e) => {
       stoi = new Map(); itos.forEach((ch, i) => { if (ch) stoi.set(ch, i); });
       const buf = new Uint8Array(m.modelBytes);
       let usedEP = 'wasm';
-      const wantGPU = CFG.ep === 'webgpu' || (CFG.ep === 'auto' && typeof navigator !== 'undefined' && 'gpu' in navigator);
+      // WebGPU は明示選択時のみ。自動では使わない（一部環境で作成が終わらず固まるため）。
+      // 明示時も25秒で見切って WASM にフォールバックする。
+      const wantGPU = CFG.ep === 'webgpu' && typeof navigator !== 'undefined' && 'gpu' in navigator;
       session = null;
       if (wantGPU) {
-        try { session = await ort.InferenceSession.create(buf, { executionProviders: ['webgpu'] }); usedEP = 'webgpu'; }
-        catch (gpuErr) { session = null; }
+        try {
+          session = await Promise.race([
+            ort.InferenceSession.create(buf, { executionProviders: ['webgpu'] }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('webgpu timeout')), 25000)),
+          ]);
+          usedEP = 'webgpu';
+        } catch (gpuErr) { session = null; }
       }
       if (!session) session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
       kvMode = session.inputNames.includes('offset');

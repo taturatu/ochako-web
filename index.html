@@ -103,8 +103,8 @@
   <div class="row"><label>最大トークン数</label><input type="range" id="set-maxnew" min="10" max="300" step="5"><span class="val" id="val-maxnew"></span></div>
   <div class="row"><label>CPUコア数（スレッド）</label><input type="range" id="set-threads" min="1" max="8" step="1"><span class="val" id="val-threads"></span></div>
   <div class="row"><label>実行方式</label><select id="set-ep">
-    <option value="auto">自動（WebGPUがあれば使う）</option>
-    <option value="webgpu">WebGPU</option>
+    <option value="auto">自動（推奨・CPU）</option>
+    <option value="webgpu">WebGPU（試験的）</option>
     <option value="wasm">CPU（WASM）</option>
   </select></div>
   <p class="note">温度・top_k・ペナルティ・最大トークンはすぐ反映されます。CPUコア数と実行方式は「エンジンを再起動」で反映されます。設定はこの端末に保存されます。「設定リンクをコピー」すると、今の設定をURLで共有できます。</p>
