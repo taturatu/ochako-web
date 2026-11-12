@@ -27,6 +27,7 @@
   #bar div { max-width:760px; margin:0 auto; display:flex; gap:8px; }
   #inp { flex:1; padding:12px; border-radius:12px; border:1px solid #cfc9bf; font-size:16px; }
   #send { padding:12px 20px; border-radius:12px; border:0; background:#2f6f4f; color:#fff; font-size:16px; }
+  #send.stop { background:#b0483a; }
   #send:disabled { opacity:.5; }
   #status { max-width:760px; margin:8px auto 0; font-size:13px; color:#6b675f; }
 </style>
@@ -38,7 +39,7 @@
   <h2>モデルの読み込み方法</h2>
   <p>モデルは約258MBあります。読み込み方法を選んでから「読み込み開始」を押してください。</p>
   <label class="opt"><input type="radio" name="mode" value="cache" checked> ブラウザに保存して使う
-    <small>初回だけダウンロードして、この端末のブラウザに保存します。次回からはダウンロードなしで、すぐ使えます。</small></label>
+    <small>初回だけダウンロードして、この端末のブラウザに保存します。次回からはダウンロードなしで、すぐ使えます。機内モードでも開けます。</small></label>
   <label class="opt"><input type="radio" name="mode" value="fresh"> 毎回ダウンロードする
     <small>保存はしません。開くたびに約258MBをダウンロードします。</small></label>
   <button id="start">読み込み開始</button>
@@ -52,7 +53,6 @@
   <button id="send" disabled>送信</button>
 </div><div id="status"></div></div>
 
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <script>
 // オフライン対応：アプリの殻をサービスワーカーでキャッシュする（機内モードでも開けるように）
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
@@ -62,14 +62,14 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 <script>
 // ===== 設定 =====
 // モデルは Hugging Face 上の単一ファイル model.onnx を URL で読み込む。
+// 推論は Web Worker で実行する（画面が固まらないように）。
 const MODEL_URL = "https://huggingface.co/tamasann/ochako-v3/resolve/main/model.onnx";
+const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
 const CACHE_NAME = "ochako-model-v1";
 const VOCAB_URL = "vocab.json";
-// B1.5（製品標準デコード）
-const TEMPERATURE = 0.65, TOP_K = 40, REP_PENALTY = 1.15, MAX_NEW = 150, MAX_SEQ = 512;
-const PAD = 0, BOS = 1, EOS = 2;
 
-let itos = [], stoi = new Map(), session = null;
+let itos = [], worker = null, workerReady = false, loadMode = "cache";
+let generating = false, currentResolve = null, currentBubble = null, genTimer = null;
 const logEl = document.getElementById('log'), inp = document.getElementById('inp'),
       sendBtn = document.getElementById('send'), statusEl = document.getElementById('status'),
       setupEl = document.getElementById('setup'), setupStatusEl = document.getElementById('setupStatus'),
@@ -78,15 +78,6 @@ const logEl = document.getElementById('log'), inp = document.getElementById('inp
 function addMsg(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   logEl.appendChild(d); window.scrollTo(0, document.body.scrollHeight); return d;
-}
-// 乱数（シード付き、再現性のため生成ごとにランダムシード）
-function mulberry32(seed) {
-  return function() {
-    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
 }
 
 async function downloadWithProgress() {
@@ -108,8 +99,7 @@ async function downloadWithProgress() {
 }
 
 async function loadModelBytes() {
-  const mode = document.querySelector('input[name="mode"]:checked').value;
-  if (mode === "cache" && "caches" in window) {
+  if (loadMode === "cache" && "caches" in window) {
     const cache = await caches.open(CACHE_NAME);
     const hit = await cache.match(MODEL_URL);
     if (hit) {
@@ -126,6 +116,37 @@ async function loadModelBytes() {
     return bytes;
   }
   return downloadWithProgress();
+}
+
+async function startWorker() {
+  const bytes = await loadModelBytes();
+  setupStatusEl.textContent = "モデルを準備しています…";
+  if (worker) worker.terminate();
+  worker = new Worker("worker.js");
+  workerReady = false;
+  await new Promise((resolve, reject) => {
+    const onMsg = (e) => {
+      if (e.data.type === 'ready') { worker.removeEventListener('message', onMsg); workerReady = true; resolve(); }
+      else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
+    };
+    worker.addEventListener('message', onMsg);
+    worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, modelBytes: bytes.buffer }, [bytes.buffer]);
+  });
+  worker.addEventListener('message', onWorkerMessage);
+}
+
+function onWorkerMessage(e) {
+  const m = e.data;
+  if (m.type === 'token' && currentBubble) {
+    currentBubble.textContent = m.text;
+    window.scrollTo(0, document.body.scrollHeight);
+  } else if (m.type === 'done' && currentResolve) {
+    const r = currentResolve; currentResolve = null;
+    r(m.text);
+  } else if (m.type === 'error' && currentResolve) {
+    const r = currentResolve; currentResolve = null;
+    r(null, new Error(m.message));
+  }
 }
 
 async function refreshCacheUI() {
@@ -148,14 +169,11 @@ delBtn.onclick = async () => {
 let started = false;
 startBtn.onclick = async () => {
   if (started) return; started = true; startBtn.disabled = true;
+  loadMode = document.querySelector('input[name="mode"]:checked').value;
   try {
     const v = await (await fetch(VOCAB_URL)).json();
     itos = v.itos;
-    itos.forEach((c, i) => { if (c !== null && c !== undefined) stoi.set(c, i); });
-    ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
-    const modelBytes = await loadModelBytes();
-    setupStatusEl.textContent = "モデルを準備しています…";
-    session = await ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'] });
+    await startWorker();
     setupEl.style.display = "none";
     statusEl.textContent = '準備できました。話しかけてみてください。';
     sendBtn.disabled = false; inp.focus();
@@ -166,49 +184,49 @@ startBtn.onclick = async () => {
 };
 refreshCacheUI();
 
-async function generate(promptText) {
-  const rand = mulberry32((Math.random() * 2 ** 31) | 0);
-  let ids = [BOS];
-  for (const ch of promptText) if (stoi.has(ch)) ids.push(stoi.get(ch));
-  const outIds = [];
-  for (let step = 0; step < MAX_NEW; step++) {
-    const ctx = ids.slice(-MAX_SEQ);
-    const input = new ort.Tensor('int64', BigInt64Array.from(ctx.map(BigInt)), [1, ctx.length]);
-    const res = await session.run({ idx: input });
-    const logits = res.logits.data; // [1, T, V]
-    const V = itos.length, off = (ctx.length - 1) * V;
-    let last = Array.from(logits.slice(off, off + V));
-    // repetition penalty 1.15（出現済みトークンに適用）
-    const seen = new Set(ids.slice(1));
-    for (const t of seen) { if (last[t] > 0) last[t] /= REP_PENALTY; else last[t] *= REP_PENALTY; }
-    // temperature
-    for (let i = 0; i < V; i++) last[i] /= TEMPERATURE;
-    // top-k 40
-    const sorted = [...last].sort((a, b) => b - a);
-    const thresh = sorted[Math.min(TOP_K, V) - 1];
-    let max = -Infinity; for (let i = 0; i < V; i++) if (last[i] >= thresh && last[i] > max) max = last[i];
-    let sum = 0; const probs = new Float64Array(V);
-    for (let i = 0; i < V; i++) { if (last[i] >= thresh) { probs[i] = Math.exp(last[i] - max); sum += probs[i]; } }
-    let r = rand() * sum, nxt = EOS;
-    for (let i = 0; i < V; i++) { if (probs[i] > 0) { r -= probs[i]; if (r <= 0) { nxt = i; break; } } }
-    if (nxt === EOS) break;
-    outIds.push(nxt); ids.push(nxt);
-    const text = outIds.map(i => itos[i] ?? '').join('');
-    if (text.includes('\nユーザー') || text.includes('\nあなた：')) break;
+function setGenerating(on, bubble) {
+  generating = on; currentBubble = bubble || null;
+  if (on) {
+    sendBtn.disabled = false; sendBtn.textContent = '停止'; sendBtn.classList.add('stop');
+    const t0 = Date.now();
+    statusEl.textContent = '考え中… 0秒';
+    genTimer = setInterval(() => { statusEl.textContent = `考え中… ${Math.floor((Date.now() - t0) / 1000)}秒`; }, 500);
+  } else {
+    sendBtn.textContent = '送信'; sendBtn.classList.remove('stop');
+    statusEl.textContent = '';
+    clearInterval(genTimer);
   }
-  let text = outIds.map(i => itos[i] ?? '').join('');
-  for (const m of ['\nユーザー', '\nあなた：']) { const p = text.indexOf(m); if (p >= 0) text = text.slice(0, p); }
-  return text.trim();
 }
 
-sendBtn.onclick = async () => {
-  const text = inp.value.trim(); if (!text || !session) return;
-  inp.value = ''; addMsg(text, 'user'); sendBtn.disabled = true;
+async function doSend() {
+  const text = inp.value.trim(); if (!text || !workerReady || generating) return;
+  inp.value = ''; addMsg(text, 'user');
   const bubble = addMsg('考え中…', 'bot');
-  try { bubble.textContent = await generate(text) || '（応答が生成できませんでした）'; }
-  catch (e) { bubble.textContent = 'エラー: ' + e.message; }
-  sendBtn.disabled = false; inp.focus();
-};
+  setGenerating(true, bubble);
+  try {
+    const out = await new Promise((resolve, reject) => {
+      currentResolve = (t, err) => err ? reject(err) : resolve(t);
+      worker.postMessage({ type: 'generate', id: 1, text });
+    });
+    bubble.textContent = out || '（応答が生成できませんでした）';
+  } catch (e) { bubble.textContent = 'エラー: ' + e.message; }
+  setGenerating(false);
+  inp.focus();
+}
+
+async function doStop() {
+  if (!generating) return;
+  if (currentBubble) currentBubble.textContent += '（停止しました）';
+  currentResolve = null;
+  setGenerating(false);
+  statusEl.textContent = '再準備しています…';
+  sendBtn.disabled = true;
+  try { await startWorker(); statusEl.textContent = '準備できました。'; }
+  catch (e) { statusEl.textContent = '再準備に失敗しました: ' + e.message; }
+  sendBtn.disabled = false;
+}
+
+sendBtn.onclick = () => { if (generating) doStop(); else doSend(); };
 inp.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.onclick(); });
 </script>
 </body>
