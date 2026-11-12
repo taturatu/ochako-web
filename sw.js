@@ -2,7 +2,7 @@
 // アプリの殻（HTML・語彙・ONNX Runtime一式）をキャッシュして、
 // 機内モードでもページが開けるようにする。モデル本体はページ側の
 // 「ブラウザに保存」が担う（キャッシュ名 ochako-model-v1）。
-const SHELL_CACHE = "ochako-shell-v1";
+const SHELL_CACHE = "ochako-shell-v2";
 const SHELL_URLS = [
   "./",
   "./index.html",

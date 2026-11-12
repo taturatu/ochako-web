@@ -7,7 +7,9 @@
 <style>
   :root { color-scheme: light; }
   body { margin:0; font-family: "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", sans-serif; background:#f7f5f2; color:#1f1e1c; }
-  header { padding:14px 16px; background:#fff; border-bottom:1px solid #e5e1da; font-weight:700; }
+  header { padding:14px 16px; background:#fff; border-bottom:1px solid #e5e1da; font-weight:700; display:flex; align-items:center; gap:10px; }
+  #newchat { margin-left:auto; padding:9px 14px; border-radius:999px; border:1px solid #cfc9bf; background:#fff; font-size:14px; font-weight:400; cursor:pointer; font-family:inherit; }
+  #newchat:active { background:#f0ede6; }
   header small { display:block; font-weight:400; color:#6b675f; margin-top:2px; }
   #setup { max-width:760px; margin:16px auto 0; padding:16px; background:#fff; border:1px solid #e5e1da; border-radius:14px; }
   #setup h2 { margin:0 0 8px; font-size:16px; }
@@ -33,7 +35,7 @@
 </style>
 </head>
 <body>
-<header>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></header>
+<header><div>おちゃこAI（ブラウザ版）<small>自作Transformer（約6,360万パラメータ）をブラウザ上だけで動かしています。step 189,910 / デコード条件 B1.5</small></div><button id="newchat">＋ 新しいチャット</button></header>
 
 <div id="setup">
   <h2>モデルの読み込み方法</h2>
@@ -230,6 +232,12 @@ async function doStop() {
 }
 
 sendBtn.onclick = () => { if (generating) doStop(); else doSend(); };
+document.getElementById('newchat').onclick = () => {
+  if (generating) return;
+  history = []; logEl.innerHTML = '';
+  statusEl.textContent = '新しいチャットを始めました。話しかけてみてください。';
+  inp.focus();
+};
 inp.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.onclick(); });
 </script>
 </body>
