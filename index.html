@@ -54,6 +54,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <script>
+// オフライン対応：アプリの殻をサービスワーカーでキャッシュする（機内モードでも開けるように）
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+</script>
+<script>
 // ===== 設定 =====
 // モデルは Hugging Face 上の単一ファイル model.onnx を URL で読み込む。
 const MODEL_URL = "https://huggingface.co/tamasann/ochako-v3/resolve/main/model.onnx";
