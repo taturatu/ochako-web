@@ -44,6 +44,54 @@ function encode(prompt) {
   return ids;
 }
 
+function encodeNoBos(text) {
+  const ids = [];
+  for (const ch of text) { const t = stoi.get(ch); if (t !== undefined) ids.push(t); }
+  return ids;
+}
+
+// v5.12（Gemini案4）：文脈が上限を超えるときは、末尾を機械的に切るのではなく
+// 「古いターンを丸ごと落とす」スライディングウィンドウにする。
+// 先頭BOSと「ユーザー：」で始まる構造は絶対に壊さない。
+function buildIds(history) {
+  const budget = effSeq();
+  const segs = []; // {role, ids}  ids は BOS を含まない
+  for (const m of history) {
+    const head = m.role === 'user' ? 'ユーザー：' : 'AI：';
+    segs.push({ role: m.role === 'user' ? 'user' : 'ai', head, ids: encodeNoBos(head + m.text.trim() + '\n') });
+  }
+  const tail = { role: 'tail', head: 'AI：', ids: encodeNoBos('AI：') };
+  const total = () => 1 + segs.reduce((a, s) => a + s.ids.length, 0) + tail.ids.length;
+  // 古いターンからペア（ユーザー＋AI）単位で落とす
+  while (total() > budget && segs.length > 1) {
+    if (segs.length >= 3 && segs[0].role === 'user' && segs[1].role === 'ai') segs.splice(0, 2);
+    else segs.splice(0, 1);
+  }
+  // それでも溢れる場合は、最も長いユーザー発話の本文を先頭側から削る
+  // （「ユーザー：」の5トークンは必ず残す）
+  while (total() > budget) {
+    let li = -1, ll = 0;
+    segs.forEach((s, i) => { if (s.role === 'user' && s.ids.length > ll) { ll = s.ids.length; li = i; } });
+    if (li < 0 || ll <= 6) break;
+    const over = total() - budget;
+    const s = segs[li];
+    const keepBody = Math.max(0, s.ids.length - 5 - over);
+    s.ids = s.ids.slice(0, 5).concat(s.ids.slice(5 + (s.ids.length - 5 - keepBody)));
+  }
+  const ids = [BOS];
+  for (const s of segs) ids.push(...s.ids);
+  ids.push(...tail.ids);
+  return ids.slice(0, budget);
+}
+
+// v5.12（Gemini案3）：生成が maxNew の8割を超えたら、文末方向へ小さなバイアスを掛けて
+// 尻切れを防ぐ。コードらしい出力（タグや関数呼び出し等を含む）では無効化する。
+const CODE_HINTS = ['<', 'def ', 'import ', 'print(', '`', '{', '}', '=>', 'function ', 'console.'];
+function looksCode(text) {
+  const t = text.slice(-200);
+  return CODE_HINTS.some((h) => t.includes(h));
+}
+
 // ===== v5.11 デコード改善 =====
 // (a) 繰り返しペナルティは「直近64トークン以内」だけに適用し、句読点と1文字の基本助詞は
 //     対象から外す（日本語の文法上必要な文字まで罰して文を崩さないため）。
@@ -66,7 +114,7 @@ function ngIndex(text) {
 // サンプリング（top-k 閾値は Float32Array のネイティブソートで取得）
 // v5.11: ペナルティの窓制限＋助詞・句読点除外、Min-p フィルタ、exclude（巻き戻し時のマスク）対応
 let sortBuf = null;
-function sampleNext(logits, ids, rand, exclude) {
+function sampleNext(logits, ids, rand, exclude, endBias) {
   const V = itos.length;
   const last = Float32Array.from(logits);
   const windowIds = new Set(ids.slice(-PENALTY_WINDOW));
@@ -76,6 +124,12 @@ function sampleNext(logits, ids, rand, exclude) {
     if (last[t] > 0) last[t] /= CFG.repPenalty; else last[t] *= CFG.repPenalty;
   }
   if (exclude) for (const t of exclude) last[t] = -Infinity;
+  if (endBias) {
+    // 文末完結バイアス：句点・終端を少しだけ押し上げ、読点を少しだけ下げる
+    for (const ch of ['。', '！', '？']) { const t = stoi.get(ch); if (t !== undefined) last[t] += 0.8; }
+    last[EOS] += 0.6;
+    const comma = stoi.get('、'); if (comma !== undefined) last[comma] -= 0.6;
+  }
   for (let i = 0; i < V; i++) last[i] /= CFG.temperature;
   if (!sortBuf || sortBuf.length !== V) sortBuf = new Float32Array(V);
   sortBuf.set(last); sortBuf.sort();
@@ -156,7 +210,8 @@ async function genKV(ids, rand) {
   for (let step = 0; step < CFG.maxNew * 3 && genCount < CFG.maxNew; step++) {
     if (cancelFlag) break;
     logitsHist[genCount] = Float32Array.from(lastLogits);
-    const nxt = sampleNext(lastLogits, allIds, rand, excludeMap.get(genCount));
+    const endBias = genCount >= Math.floor(CFG.maxNew * 0.8) && !looksCode(outText);
+    const nxt = sampleNext(lastLogits, allIds, rand, excludeMap.get(genCount), endBias);
     if (nxt === EOS) break;
     if (!itos[nxt]) break;
     allIds.push(nxt); genCount++;
@@ -217,7 +272,8 @@ async function genFull(ids, rand) {
     const feeds = { idx: new ort.Tensor('int64', BigInt64Array.from(ctx.map(BigInt)), [1, ctx.length]) };
     const out = await session.run(feeds);
     const logits = out.logits.data;
-    const nxt = sampleNext(logits.subarray((ctx.length - 1) * V, ctx.length * V), ids, rand, excludeMap.get(genCount));
+    const endBiasF = genCount >= Math.floor(CFG.maxNew * 0.8) && !looksCode(outText);
+    const nxt = sampleNext(logits.subarray((ctx.length - 1) * V, ctx.length * V), ids, rand, excludeMap.get(genCount), endBiasF);
     if (nxt === EOS) break;
     if (!itos[nxt]) break;
     ids.push(nxt); genCount++;
@@ -287,7 +343,7 @@ self.onmessage = async (e) => {
     if (m.type === 'generate') {
       cancelFlag = false;
       const t0 = performance.now();
-      const ids = encode(buildPrompt(m.history));
+      const ids = buildIds(m.history);
       const rand = mulberry32((Math.random() * 1e9) | 0);
       const r = kvMode ? await genKV(ids, rand) : await genFull(ids, rand);
       const ms = performance.now() - t0;

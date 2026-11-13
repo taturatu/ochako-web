@@ -14,8 +14,8 @@
 //   「古いSW＋古いページ」に固定されて新しい修正が一切届かなくなるのが無限準備の温床だった。
 // - 新バージョンは待機させず即時有効化（skipWaiting）する。古い版で固まった端末を次回訪問で救済するため。
 //   ページ側の「更新する」ボタン方式は廃止（メッセージ自体は互換のため残す）。
-// v7（2026-11-13）：v5.11（初期化サブステータス＋ウォッチドッグterminate＋デコード改善）を届けるための版上げ。
-const SHELL_CACHE = "ochako-shell-v7";
+// v8（2026-11-13）：v5.12（ターン境界スライディングウィンドウ＋文末完結バイアス）を届けるための版上げ。
+const SHELL_CACHE = "ochako-shell-v8";
 const DOC_URLS = ["./", "./index.html", "./vocab.json", "./worker.js", "./model-version.json"];
 const CDN_URLS = [
   "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js",
