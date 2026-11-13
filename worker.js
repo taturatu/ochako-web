@@ -62,10 +62,16 @@ function buildIds(history) {
   }
   const tail = { role: 'tail', head: 'AI：', ids: encodeNoBos('AI：') };
   const total = () => 1 + segs.reduce((a, s) => a + s.ids.length, 0) + tail.ids.length;
-  // 古いターンからペア（ユーザー＋AI）単位で落とす
-  while (total() > budget && segs.length > 1) {
-    if (segs.length >= 3 && segs[0].role === 'user' && segs[1].role === 'ai') segs.splice(0, 2);
-    else segs.splice(0, 1);
+  // 古いターンからペア（ユーザー＋AI）単位で落とす。
+  // v5.13: 上限到達時は1往復ずつではなく文脈長の約45%まで一気に落とす（ブロック単位パージ）。
+  // 先頭が毎ターン変わって Prefix Cache が全ミスするのを防ぎ、ドロップ後の数ターンは
+  // 接頭辞が安定してキャッシュが再びヒットするようにする。
+  if (total() > budget) {
+    const lowTarget = Math.floor(budget * 0.55);
+    while (total() > lowTarget && segs.length > 1) {
+      if (segs.length >= 3 && segs[0].role === 'user' && segs[1].role === 'ai') segs.splice(0, 2);
+      else segs.splice(0, 1);
+    }
   }
   // それでも溢れる場合は、最も長いユーザー発話の本文を先頭側から削る
   // （「ユーザー：」の5トークンは必ず残す）
@@ -110,6 +116,17 @@ function ngIndex(text) {
   }
   return best;
 }
+// v5.13: 巻き戻し時に、踏んだ表現の開始トークンだけでなくNG表現の頭文字トークン群を
+// まとめてマスクし、類似表現への連続分岐（わかりません→分かりません→…）を防ぐ。
+let ngFirstTokens = null;
+function getNgFirstTokens() {
+  if (!ngFirstTokens) {
+    ngFirstTokens = new Set();
+    for (const p of NG_PHRASES) { const t = stoi.get(p[0]); if (t !== undefined) ngFirstTokens.add(t); }
+  }
+  return ngFirstTokens;
+}
+const MAX_ROLLBACKS = 2; // v5.13: 1応答あたりの巻き戻し上限（従来3回→2回）
 
 // サンプリング（top-k 閾値は Float32Array のネイティブソートで取得）
 // v5.11: ペナルティの窓制限＋助詞・句読点除外、Min-p フィルタ、exclude（巻き戻し時のマスク）対応
@@ -219,11 +236,12 @@ async function genKV(ids, rand) {
     // NG表現が出たら、開始位置まで KV を巻き戻して開始トークンをマスクし、別表現へ分岐する
     const hit = ngIndex(outText);
     if (hit >= 0) {
-      if (rollbacks >= 3) { outText = outText.slice(0, hit); break; }
+      if (rollbacks >= MAX_ROLLBACKS) { outText = outText.slice(0, hit); break; }
       rollbacks++;
       const bad = allIds[genStart + hit];
       if (!excludeMap.has(hit)) excludeMap.set(hit, new Set());
       excludeMap.get(hit).add(bad);
+      for (const t of getNgFirstTokens()) excludeMap.get(hit).add(t);
       allIds.length = genStart + hit;
       outText = outText.slice(0, hit);
       genCount = hit;
@@ -281,11 +299,12 @@ async function genFull(ids, rand) {
     // NG表現は開始位置まで巻き戻して開始トークンをマスクし、別表現へ分岐（全文再生成はしない）
     const hit = ngIndex(outText);
     if (hit >= 0) {
-      if (rollbacks >= 3) { outText = outText.slice(0, hit); break; }
+      if (rollbacks >= MAX_ROLLBACKS) { outText = outText.slice(0, hit); break; }
       rollbacks++;
       const bad = ids[genStart + hit];
       if (!excludeMap.has(hit)) excludeMap.set(hit, new Set());
       excludeMap.get(hit).add(bad);
+      for (const t of getNgFirstTokens()) excludeMap.get(hit).add(t);
       ids.length = genStart + hit;
       outText = outText.slice(0, hit);
       genCount = hit;
