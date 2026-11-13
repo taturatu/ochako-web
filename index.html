@@ -234,10 +234,20 @@ async function loadModelBytes() {
     const cache = await caches.open(CACHE_NAME);
     const hit = await cache.match(url);
     if (hit) {
-      setupStatusEl.textContent = "保存済みモデルを使います（ダウンロードなし）";
-      return new Uint8Array(await hit.arrayBuffer());
+      const cached = new Uint8Array(await hit.arrayBuffer());
+      if (cached.length === size) {
+        setupStatusEl.textContent = "保存済みモデルを使います（ダウンロードなし）";
+        return cached;
+      }
+      // サイズが合わない保存データは壊れている（途中までしか保存されていない等）ので捨てて取り直す
+      await cache.delete(url);
+      localStorage.removeItem(versionKey());
+      setupStatusEl.textContent = "保存済みモデルが壊れていたため、ダウンロードし直します…";
     }
     const bytes = await downloadWithProgress(url, size);
+    if (bytes.length !== size) {
+      throw new Error(`ダウンロードが途中で切れました（${(bytes.length / 1048576).toFixed(0)}MB / ${(size / 1048576).toFixed(0)}MB）。通信のよい場所でもう一度お試しください`);
+    }
     try {
       await cache.put(url, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
       setupStatusEl.textContent = "保存しました。次回からはダウンロードなしで使えます。";
@@ -248,7 +258,11 @@ async function loadModelBytes() {
     }
     return bytes;
   }
-  return downloadWithProgress(url, size);
+  const fresh = await downloadWithProgress(url, size);
+  if (fresh.length !== size) {
+    throw new Error(`ダウンロードが途中で切れました（${(fresh.length / 1048576).toFixed(0)}MB / ${(size / 1048576).toFixed(0)}MB）。通信のよい場所でもう一度お試しください`);
+  }
+  return fresh;
 }
 
 async function startWorker() {
