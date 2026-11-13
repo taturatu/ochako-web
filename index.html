@@ -266,35 +266,49 @@ async function loadModelBytes() {
 }
 
 async function startWorker() {
+  setupStatusEl.textContent = "① モデルを取得しています…";
   const bytes = await loadModelBytes();
+  setupStatusEl.textContent = "② モデルの受け取りが完了しました（サイズ検証済み）。エンジンを起動します…";
   try {
     await startWorkerOnce(bytes, settings);
   } catch (e) {
-    // スレッド数やWebGPUが原因で固まる環境があるため、安全設定（スレッド1・CPU）で1回だけ再試行する
-    if (settings.threads > 1 || settings.ep === 'webgpu') {
-      setupStatusEl.textContent = "準備に時間がかかったため、安全設定（スレッド1・CPU）で再試行しています…";
-      await startWorkerOnce(bytes, { ...settings, threads: 1, ep: 'wasm' });
-    } else { throw e; }
+    // v5.11: 設定によらず、固まったワーカーは必ず終了させてから安全設定で1回だけ再試行する
+    // （スレッド1・CPUのときも、ワーカー再作成で ORT の状態ごとリセットされる）
+    if (worker) { try { worker.terminate(); } catch (_) {} worker = null; }
+    setupStatusEl.textContent = "準備が止まったため、ワーカーを終了して安全設定（スレッド1・CPU）で再試行しています…";
+    await startWorkerOnce(bytes, { ...settings, threads: 1, ep: 'wasm' });
   }
 }
+const INIT_PHASE_TEXT = {
+  ort: "③ 推論エンジン（ORT）を読み込んでいます…",
+  session: "③ モデルをエンジンに載せています（セッション作成中）…",
+  'session-done': "③ エンジンの準備がほぼ完了しました…",
+};
 async function startWorkerOnce(bytes, cfg) {
-  setupStatusEl.textContent = "モデルを準備しています…";
+  setupStatusEl.textContent = "③ エンジンを起動しています…";
   if (worker) worker.terminate();
   worker = new Worker("worker.js");
   workerReady = false;
   const bufCopy = bytes.buffer.slice(0);
+  const w = worker;
   await Promise.race([
     new Promise((resolve, reject) => {
       const onMsg = (e) => {
-        if (e.data.type === 'ready') { worker.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; resolve(); }
-        else if (e.data.type === 'error' && !e.data.id) { worker.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
+        if (e.data.type === 'init-progress') { const t = INIT_PHASE_TEXT[e.data.phase]; if (t) setupStatusEl.textContent = t; }
+        else if (e.data.type === 'ready') { w.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; setupStatusEl.textContent = "④ 準備が完了しました"; resolve(); }
+        else if (e.data.type === 'error' && !e.data.id) { w.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
       };
-      worker.addEventListener('message', onMsg);
-      worker.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: effCfg(cfg || settings), modelBytes: bufCopy }, [bufCopy]);
+      w.addEventListener('message', onMsg);
+      w.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: effCfg(cfg || settings), modelBytes: bufCopy }, [bufCopy]);
     }),
-    new Promise((_, rej) => setTimeout(() => rej(new Error('エンジン準備タイムアウト')), 75000)),
+    new Promise((_, rej) => setTimeout(() => {
+      // タイムアウト時はワーカーを必ず終了させる（固まったまま裏で残さない）
+      try { w.terminate(); } catch (_) {}
+      if (worker === w) worker = null;
+      rej(new Error('エンジン準備タイムアウト'));
+    }, 75000)),
   ]);
-  worker.addEventListener('message', onWorkerMessage);
+  w.addEventListener('message', onWorkerMessage);
 }
 
 function onWorkerMessage(e) {

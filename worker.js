@@ -9,8 +9,8 @@ let session = null, itos = [], kvMode = false;
 let stoi = new Map();
 
 const MAX_SEQ = 512;
-// デコード設定（標準は製品標準 B1.5。画面から変更できる）
-let CFG = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1, ep: 'auto', maxSeq: 512, lowMem: false };
+// デコード設定（標準は製品標準 B1.5。画面から変更できる。minP は v5.11 で追加した内部既定）
+let CFG = { temperature: 0.65, topK: 40, repPenalty: 1.15, maxNew: 150, threads: 1, ep: 'auto', maxSeq: 512, lowMem: false, minP: 0.05 };
 const effSeq = () => Math.min(CFG.maxSeq || MAX_SEQ, MAX_SEQ);
 const BOS = 1, EOS = 2;
 const NL = 12, NH = 10, HD = 64;
@@ -44,18 +44,56 @@ function encode(prompt) {
   return ids;
 }
 
-// サンプリング（penalty は出現トークンだけに適用、top-k 閾値は Float32Array のネイティブソートで取得）
+// ===== v5.11 デコード改善 =====
+// (a) 繰り返しペナルティは「直近64トークン以内」だけに適用し、句読点と1文字の基本助詞は
+//     対象から外す（日本語の文法上必要な文字まで罰して文を崩さないため）。
+const PENALTY_EXEMPT = new Set(['、', '。', '！', '？', '!', '?', '・', '…', '「', '」', '『', '』', '（', '）',
+  'は', 'が', 'の', 'に', 'を', 'て', 'で', 'と', 'も', 'へ', 'や']);
+const PENALTY_WINDOW = 64;
+// (b) 「わからない」系のNG表現。検知したら全文再生成はせず、その表現の開始位置まで
+//     巻き戻して開始トークンをマスクし、別の表現へ分岐させる（生成ループ側で処理）。
+const NG_PHRASES = ['わかりませんでした', '分かりませんでした', 'わかりません', '分かりません', 'わからないです',
+  '知りません', '知らないです', '存じません', 'お答えできません', '答えられません', '分からない', 'わからない'];
+function ngIndex(text) {
+  let best = -1;
+  for (const p of NG_PHRASES) {
+    const i = text.indexOf(p);
+    if (i >= 0 && (best < 0 || i < best)) best = i;
+  }
+  return best;
+}
+
+// サンプリング（top-k 閾値は Float32Array のネイティブソートで取得）
+// v5.11: ペナルティの窓制限＋助詞・句読点除外、Min-p フィルタ、exclude（巻き戻し時のマスク）対応
 let sortBuf = null;
-function sampleNext(logits, ids, rand) {
+function sampleNext(logits, ids, rand, exclude) {
   const V = itos.length;
   const last = Float32Array.from(logits);
-  for (const t of new Set(ids)) { if (last[t] > 0) last[t] /= CFG.repPenalty; else last[t] *= CFG.repPenalty; }
+  const windowIds = new Set(ids.slice(-PENALTY_WINDOW));
+  for (const t of windowIds) {
+    const ch = itos[t];
+    if (ch && PENALTY_EXEMPT.has(ch)) continue;
+    if (last[t] > 0) last[t] /= CFG.repPenalty; else last[t] *= CFG.repPenalty;
+  }
+  if (exclude) for (const t of exclude) last[t] = -Infinity;
   for (let i = 0; i < V; i++) last[i] /= CFG.temperature;
   if (!sortBuf || sortBuf.length !== V) sortBuf = new Float32Array(V);
   sortBuf.set(last); sortBuf.sort();
   const thresh = sortBuf[V - Math.min(CFG.topK, V)];
+  // Min-p: 最大確率トークンの minP 倍未満の確率しかない候補を足切りする
+  // （温度適用後の logit 空間では l_i >= l_max + ln(minP) と等価）
+  let maxL = -Infinity;
+  for (let i = 0; i < V; i++) if (last[i] > maxL) maxL = last[i];
+  const minPThresh = (CFG.minP && CFG.minP > 0) ? maxL + Math.log(CFG.minP) : -Infinity;
+  const floor = Math.max(thresh, minPThresh);
   let sum = 0; const cand = [];
-  for (let i = 0; i < V; i++) if (last[i] >= thresh) { last[i] = Math.exp(last[i] - thresh); sum += last[i]; cand.push(i); }
+  for (let i = 0; i < V; i++) if (last[i] >= floor && isFinite(last[i])) { last[i] = Math.exp(last[i] - floor); sum += last[i]; cand.push(i); }
+  if (!cand.length) { // 足切りし過ぎた場合は、マスクされていない最良トークンを返す
+    let bestLogit = -Infinity, bestIdx = -1;
+    const raw = Float32Array.from(logits);
+    for (let i = 0; i < V; i++) { if (exclude && exclude.has(i)) continue; if (raw[i] > bestLogit) { bestLogit = raw[i]; bestIdx = i; } }
+    return bestIdx >= 0 ? bestIdx : 0;
+  }
   let r = rand() * sum;
   for (const i of cand) { r -= last[i]; if (r <= 0) return i; }
   return cand[cand.length - 1];
@@ -109,21 +147,50 @@ async function genKV(ids, rand) {
   let lastLogits = r.logits.subarray((pre.length - 1) * V, pre.length * V);
 
   const allIds = ids.slice();
+  const genStart = allIds.length; // ここから先が生成分（文字単位なので生成トークン数＝生成文字数）
   let outText = '', genCount = 0;
-  for (let step = 0; step < CFG.maxNew; step++) {
+  // v5.11: NG表現の巻き戻し用に、各生成位置の logits を保持する
+  const logitsHist = [];
+  const excludeMap = new Map(); // 生成位置 -> 巻き戻しでマスクするトークン集合（累積）
+  let rollbacks = 0;
+  for (let step = 0; step < CFG.maxNew * 3 && genCount < CFG.maxNew; step++) {
     if (cancelFlag) break;
-    const nxt = sampleNext(lastLogits, allIds, rand);
+    logitsHist[genCount] = Float32Array.from(lastLogits);
+    const nxt = sampleNext(lastLogits, allIds, rand, excludeMap.get(genCount));
     if (nxt === EOS) break;
     if (!itos[nxt]) break;
     allIds.push(nxt); genCount++;
     outText += itos[nxt];
+    // NG表現が出たら、開始位置まで KV を巻き戻して開始トークンをマスクし、別表現へ分岐する
+    const hit = ngIndex(outText);
+    if (hit >= 0) {
+      if (rollbacks >= 3) { outText = outText.slice(0, hit); break; }
+      rollbacks++;
+      const bad = allIds[genStart + hit];
+      if (!excludeMap.has(hit)) excludeMap.set(hit, new Set());
+      excludeMap.get(hit).add(bad);
+      allIds.length = genStart + hit;
+      outText = outText.slice(0, hit);
+      genCount = hit;
+      const keepLen = genStart + hit;
+      if (keepLen < pastLen) {
+        const sliced = [];
+        for (let i = 0; i < NL; i++) sliced.push({
+          k: new ort.Tensor('float32', slicePastData(past[i].k.data, pastLen, keepLen), [1, NH, keepLen, HD]),
+          v: new ort.Tensor('float32', slicePastData(past[i].v.data, pastLen, keepLen), [1, NH, keepLen, HD]),
+        });
+        past = sliced; pastLen = keepLen;
+      }
+      lastLogits = logitsHist[hit];
+      continue;
+    }
     if (outText.includes('\nユーザー：') || outText.includes('\nAI：')) {
       outText = outText.split('\nユーザー：')[0].split('\nAI：')[0];
       break;
     }
     if (step % 2 === 0 || outText.length < 12) postMessage({ type: 'partial', text: outText });
     if (outText.length >= 600) break;
-    if (step === CFG.maxNew - 1 || pastLen >= effSeq()) break;
+    if (genCount >= CFG.maxNew || pastLen >= effSeq()) break;
     r = await runKV([nxt], pastLen, past);
     past = r.past; pastLen += 1;
     lastLogits = r.logits.subarray(0, V);
@@ -140,18 +207,34 @@ async function genKV(ids, rand) {
 // 従来版生成（全系列を毎回計算）
 async function genFull(ids, rand) {
   const V = itos.length;
+  const genStart = ids.length;
   let outText = '', genCount = 0;
-  for (let step = 0; step < CFG.maxNew; step++) {
+  const excludeMap = new Map();
+  let rollbacks = 0;
+  for (let step = 0; step < CFG.maxNew * 3 && genCount < CFG.maxNew; step++) {
     if (cancelFlag) break;
     const ctx = ids.slice(-effSeq());
     const feeds = { idx: new ort.Tensor('int64', BigInt64Array.from(ctx.map(BigInt)), [1, ctx.length]) };
     const out = await session.run(feeds);
     const logits = out.logits.data;
-    const nxt = sampleNext(logits.subarray((ctx.length - 1) * V, ctx.length * V), ids, rand);
+    const nxt = sampleNext(logits.subarray((ctx.length - 1) * V, ctx.length * V), ids, rand, excludeMap.get(genCount));
     if (nxt === EOS) break;
     if (!itos[nxt]) break;
     ids.push(nxt); genCount++;
     outText += itos[nxt];
+    // NG表現は開始位置まで巻き戻して開始トークンをマスクし、別表現へ分岐（全文再生成はしない）
+    const hit = ngIndex(outText);
+    if (hit >= 0) {
+      if (rollbacks >= 3) { outText = outText.slice(0, hit); break; }
+      rollbacks++;
+      const bad = ids[genStart + hit];
+      if (!excludeMap.has(hit)) excludeMap.set(hit, new Set());
+      excludeMap.get(hit).add(bad);
+      ids.length = genStart + hit;
+      outText = outText.slice(0, hit);
+      genCount = hit;
+      continue;
+    }
     if (outText.includes('\nユーザー：') || outText.includes('\nAI：')) {
       outText = outText.split('\nユーザー：')[0].split('\nAI：')[0];
       break;
@@ -171,6 +254,7 @@ self.onmessage = async (e) => {
     if (m.type === 'stop') { cancelFlag = true; return; }
     if (m.type === 'init') {
       if (m.cfg) CFG = { ...CFG, ...m.cfg };
+      postMessage({ type: 'init-progress', phase: 'ort' });
       importScripts(m.ortBase + 'ort.min.js');
       ort.env.wasm.wasmPaths = m.ortBase;
       ort.env.wasm.numThreads = CFG.threads;
@@ -183,6 +267,7 @@ self.onmessage = async (e) => {
       const wantGPU = CFG.ep === 'webgpu' && typeof navigator !== 'undefined' && 'gpu' in navigator;
       session = null;
       const memOpts = CFG.lowMem ? { enableCpuMemArena: false, enableMemPattern: false } : {};
+      postMessage({ type: 'init-progress', phase: 'session' });
       if (wantGPU) {
         try {
           session = await Promise.race([
@@ -193,6 +278,7 @@ self.onmessage = async (e) => {
         } catch (gpuErr) { session = null; }
       }
       if (!session) session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'], ...memOpts });
+      postMessage({ type: 'init-progress', phase: 'session-done' });
       kvMode = session.inputNames.includes('offset');
       cacheIds = null; cachePast = null;
       postMessage({ type: 'ready', kv: kvMode, ep: usedEP, isolated: (typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : false) });
