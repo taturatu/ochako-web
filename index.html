@@ -291,23 +291,31 @@ async function startWorkerOnce(bytes, cfg) {
   workerReady = false;
   const bufCopy = bytes.buffer.slice(0);
   const w = worker;
-  await Promise.race([
-    new Promise((resolve, reject) => {
-      const onMsg = (e) => {
-        if (e.data.type === 'init-progress') { const t = INIT_PHASE_TEXT[e.data.phase]; if (t) setupStatusEl.textContent = t; }
-        else if (e.data.type === 'ready') { w.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; setupStatusEl.textContent = "④ 準備が完了しました"; resolve(); }
-        else if (e.data.type === 'error' && !e.data.id) { w.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
-      };
-      w.addEventListener('message', onMsg);
-      w.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: effCfg(cfg || settings), modelBytes: bufCopy }, [bufCopy]);
-    }),
-    new Promise((_, rej) => setTimeout(() => {
-      // タイムアウト時はワーカーを必ず終了させる（固まったまま裏で残さない）
-      try { w.terminate(); } catch (_) {}
-      if (worker === w) worker = null;
-      rej(new Error('エンジン準備タイムアウト'));
-    }, 75000)),
-  ]);
+  // v5.14: 初期化ウォッチドッグは初期化が完了したら必ず解除する。解除し忘れると、正常に起動した
+  // ワーカーが75秒後に無条件で終了させられ、worker が null のまま workerReady だけが true に残り、
+  // 送信・停止の postMessage が "Cannot read properties of null (reading 'postMessage')" で落ちて使えなくなった。
+  let initTimer = null;
+  try {
+    await Promise.race([
+      new Promise((resolve, reject) => {
+        const onMsg = (e) => {
+          if (e.data.type === 'init-progress') { const t = INIT_PHASE_TEXT[e.data.phase]; if (t) setupStatusEl.textContent = t; }
+          else if (e.data.type === 'ready') { w.removeEventListener('message', onMsg); workerReady = true; readyInfo = e.data; setupStatusEl.textContent = "④ 準備が完了しました"; resolve(); }
+          else if (e.data.type === 'error' && !e.data.id) { w.removeEventListener('message', onMsg); reject(new Error(e.data.message)); }
+        };
+        w.addEventListener('message', onMsg);
+        w.postMessage({ type: 'init', ortBase: ORT_BASE, itos, cfg: effCfg(cfg || settings), modelBytes: bufCopy }, [bufCopy]);
+      }),
+      new Promise((_, rej) => { initTimer = setTimeout(() => {
+        // タイムアウト時はワーカーを必ず終了させる（固まったまま裏で残さない）
+        try { w.terminate(); } catch (_) {}
+        if (worker === w) worker = null;
+        rej(new Error('エンジン準備タイムアウト'));
+      }, 75000); }),
+    ]);
+  } finally {
+    if (initTimer !== null) clearTimeout(initTimer);
+  }
   w.addEventListener('message', onWorkerMessage);
 }
 
@@ -551,7 +559,7 @@ function setGenerating(on, bubble) {
 }
 
 async function doSend() {
-  const text = inp.value.trim(); if (!text || !workerReady || generating) return;
+  const text = inp.value.trim(); if (!text || !worker || !workerReady || generating) return;
   inp.value = ''; addMsg(text, 'user');
   history.push({ role: 'user', text });
   const bubble = addMsg('考え中…', 'bot');
@@ -573,7 +581,7 @@ async function doSend() {
 
 async function doStop() {
   if (!generating) return;
-  worker.postMessage({ type: 'stop' });
+  if (worker) worker.postMessage({ type: 'stop' });
   if (currentResolve) {
     const r = currentResolve; currentResolve = null;
     const partial = currentBubble ? currentBubble.textContent : '';
