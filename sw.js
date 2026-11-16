@@ -17,7 +17,8 @@
 // v9（2026-11-13）：v5.13（窓のブロック単位パージ＋NG巻き戻し上限2回・頭文字一括マスク）を届けるための版上げ。
 // v10（2026-11-14）：v5.14（初期化ウォッチドッグのタイマー解除漏れで起動済みワーカーが75秒後に終了させられ、
 //   postMessage の null エラーで使えなくなる不具合の修正）を届けるための版上げ。
-const SHELL_CACHE = "ochako-shell-v11";
+// v12（2026-11-16）：設定パネルの温度ラベルを「温度（返しのばらつき）」に変更した版を届けるための版上げ。
+const SHELL_CACHE = "ochako-shell-v12";
 const DOC_URLS = ["./", "./index.html", "./vocab.json", "./worker.js", "./model-version.json"];
 const CDN_URLS = [
   "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js",
